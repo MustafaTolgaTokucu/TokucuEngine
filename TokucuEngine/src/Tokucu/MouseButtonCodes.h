@@ -1,0 +1,14 @@
+#pragma once
+//GLFW KEYS
+#define TKC_MOUSE_BUTTON_1         0
+#define TKC_MOUSE_BUTTON_2         1
+#define TKC_MOUSE_BUTTON_3         2
+#define TKC_MOUSE_BUTTON_4         3
+#define TKC_MOUSE_BUTTON_5         4
+#define TKC_MOUSE_BUTTON_6         5
+#define TKC_MOUSE_BUTTON_7         6
+#define TKC_MOUSE_BUTTON_8         7
+#define TKC_MOUSE_BUTTON_LAST      TKC_MOUSE_BUTTON_8
+#define TKC_MOUSE_BUTTON_LEFT      TKC_MOUSE_BUTTON_1
+#define TKC_MOUSE_BUTTON_RIGHT     TKC_MOUSE_BUTTON_2
+#define TKC_MOUSE_BUTTON_MIDDLE    TKC_MOUSE_BUTTON_3

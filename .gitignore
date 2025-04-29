@@ -1,0 +1,40 @@
+# Ignore build artifacts
+build/
+bin/
+bin-int/
+Sandbox/assets/models/
+Sandbox/assets/textures/
+.vs/
+
+# Ignore Visual Studio files
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.sln
+*.suo
+*.ncb
+*.opensdf
+*.sdf
+*.cache
+*.log
+
+# Ignore CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Ignore user-specific files
+*.db
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+
+# Ignore macOS and Linux system files
+.DS_Store
+*.directory
+
+# Ignore VSCode settings if any
+.vscode/
