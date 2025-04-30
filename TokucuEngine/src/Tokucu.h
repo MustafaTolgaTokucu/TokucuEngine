@@ -9,7 +9,5 @@
 #include "Tokucu/KeyCodes.h"
 #include "Tokucu/MouseButtonCodes.h"
 
-
-
 //Entry Point
 #include "Tokucu/EntryPoint.h"

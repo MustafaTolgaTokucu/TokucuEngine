@@ -11,10 +11,12 @@
 
 namespace Tokucu {
 #ifdef NDEBUG
-	const bool enableValidationLayers = false;
+	const bool enableValidationLayers = true;
 #else
 	const bool enableValidationLayers = true;
 #endif
+
+	//TODO: Better abstraction for clarity
 
 	VulkanRendererAPI::VulkanRendererAPI()
 	{
@@ -81,8 +83,7 @@ namespace Tokucu {
 			// Bottom face (CCW)
 			20, 21, 22,  20, 22, 23
 		};
-		
-
+		//b_cubeconvulation = false;
 		uint32_t extensionCount = 0;
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
 		std::cout << extensionCount << " extensions supported\n";
@@ -91,7 +92,7 @@ namespace Tokucu {
 	void VulkanRendererAPI::Init(const std::shared_ptr<Window>& window)
 	{
 		glfwWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
-
+		
 		createInstance();
 		setupDebugMessenger();
 		createSurface();
@@ -125,49 +126,190 @@ namespace Tokucu {
 	{
 		vkDeviceWaitIdle(device);
 
+		
 		vkDestroyImageView(device, colorImageView, nullptr);
 		vkDestroyImage(device, colorImage, nullptr);
 		vkFreeMemory(device, colorImageMemory, nullptr);
-
-		cleanupSwapChain();
-		vkDestroyFramebuffer(device, shadowFrameBuffer, nullptr);
-
+		
 		vkDestroyImageView(device, depthImageView, nullptr);
 		vkDestroyImage(device, depthImage, nullptr);
 		vkFreeMemory(device, depthImageMemory, nullptr);
-
+		
 		vkDestroyImageView(device, shadowImageView, nullptr);
 		vkDestroyImage(device, shadowImage, nullptr);
 		vkFreeMemory(device, shadowImageMemory, nullptr);
-
+		
+		vkDestroyImageView(device, HDRCubeView, nullptr);
+		vkDestroyImage(device, HDRCubeImage, nullptr);
+		vkFreeMemory(device, HDRCubeImageMemory, nullptr);
+		
+		for (size_t i = 0; i < prefilterMapTempViews.size(); i++)
+		{
+			if (prefilterMapTempViews[i] != VK_NULL_HANDLE)
+			{
+				vkDestroyImageView(device, prefilterMapTempViews[i], nullptr);
+				prefilterMapTempViews[i] = VK_NULL_HANDLE;
+			}
+		}
+		vkDestroyImageView(device, prefilterMapView, nullptr);
+		vkDestroyImage(device, prefilterMapImage, nullptr);
+		vkFreeMemory(device, prefilterMapImageMemory, nullptr);
+		
+		vkDestroyImageView(device, BRDFImageView, nullptr);
+		vkDestroyImage(device, BRDFImage, nullptr);
+		vkFreeMemory(device, BRDFImageMemory, nullptr);
+		
+		vkDestroyImageView(device, skyboxImageView, nullptr);
+		vkDestroyImage(device, skyboxImage, nullptr);
+		vkFreeMemory(device, skyboxImageMemory, nullptr);
+		
+		vkDestroyImageView(device, skyboxHDRImageView, nullptr);
+		vkDestroyImage(device, skyboxHDRImage, nullptr);
+		vkFreeMemory(device, skyboxHDRImageMemory, nullptr);
+		
+		vkDestroyImageView(device, CubeConvolutionImageView, nullptr);
+		vkDestroyImage(device, CubeConvolutionImage, nullptr);
+		vkFreeMemory(device, CubeConvolutionImageMemory, nullptr);
+		
 		vkDestroySampler(device, textureSampler, nullptr);
 		vkDestroySampler(device, shadowSampler, nullptr);
+		vkDestroySampler(device, prefilterTextureSampler, nullptr);
+
+		for (auto texture : textureImages)
+		{
+			if (texture != VK_NULL_HANDLE)
+			{
+				vkDestroyImage(device, texture, nullptr);
+				texture = VK_NULL_HANDLE;
+			}
+			
+		}
+		for (auto textureMemory : textureImagesMemory)
+		{
+			if (textureMemory != VK_NULL_HANDLE)
+			{
+				vkFreeMemory(device, textureMemory, nullptr);
+				textureMemory = VK_NULL_HANDLE;
+			}
+		}
+		for (auto textureView : textureImagesView)
+		{
+			if (textureView != VK_NULL_HANDLE)
+			{
+				vkDestroyImageView(device, textureView, nullptr);
+				textureView = VK_NULL_HANDLE;
+			}
+		}
+
+		cleanupSwapChain();
+
+		vkDestroyFramebuffer(device, shadowFrameBuffer, nullptr);
+		vkDestroyFramebuffer(device, HDRCubeFrameBuffer, nullptr);
+		vkDestroyFramebuffer(device, CubeConvolutionFrameBuffer, nullptr);
+		vkDestroyFramebuffer(device, BRDFFrameBuffer, nullptr);
+		for (size_t i = 0; i < prefilterMapFramebuffers.size(); i++)
+		{
+			vkDestroyFramebuffer(device, prefilterMapFramebuffers[i], nullptr);
+		}
+
 		for (int i = 0; i < Objects.size(); i++)
 		{
 
-			for (size_t j = 0; j < Objects[i].textures.imageViews.size(); j++)
+			if(Objects[i].b_PBR == true )
 			{
-				vkDestroyImageView(device, Objects[i].textures.imageViews[j], nullptr);
+				for (size_t j = 0; j < Objects[i].textures.imageViews.size(); j++)
+				{
+					if (Objects[i].textures.imageViews[j] != VK_NULL_HANDLE) {
+						vkDestroyImageView(device, Objects[i].textures.imageViews[j], nullptr);
+						Objects[i].textures.imageViews[j] = VK_NULL_HANDLE;
+					}
+				}
+
+				if (Objects[i].textures.ambient != VK_NULL_HANDLE) {
+					vkDestroyImage(device, Objects[i].textures.ambient, nullptr);
+					vkFreeMemory(device, Objects[i].textures.ambientMemory, nullptr);
+					Objects[i].textures.ambient = VK_NULL_HANDLE;
+					Objects[i].textures.ambientMemory = VK_NULL_HANDLE;
+				}
+				if (Objects[i].textures.diffuse != VK_NULL_HANDLE) {
+					vkDestroyImage(device, Objects[i].textures.diffuse, nullptr);
+					vkFreeMemory(device, Objects[i].textures.diffuseMemory, nullptr);
+					Objects[i].textures.diffuse = VK_NULL_HANDLE;
+					Objects[i].textures.diffuseMemory = VK_NULL_HANDLE;
+				}
+				if (Objects[i].textures.specular != VK_NULL_HANDLE) {
+					vkDestroyImage(device, Objects[i].textures.specular, nullptr);
+					vkFreeMemory(device, Objects[i].textures.specularMemory, nullptr);
+					Objects[i].textures.specular = VK_NULL_HANDLE;
+					Objects[i].textures.specularMemory = VK_NULL_HANDLE;
+				}
+				if (Objects[i].textures.normal != VK_NULL_HANDLE) {
+					vkDestroyImage(device, Objects[i].textures.normal, nullptr);
+					vkFreeMemory(device, Objects[i].textures.normalMemory, nullptr);
+					Objects[i].textures.normal = VK_NULL_HANDLE;
+					Objects[i].textures.normalMemory = VK_NULL_HANDLE;
+				}
 			}
-
-			vkDestroyImage(device, Objects[i].textures.ambient, nullptr);
-			vkDestroyImage(device, Objects[i].textures.diffuse, nullptr);
-			vkDestroyImage(device, Objects[i].textures.specular, nullptr);
-
-			vkFreeMemory(device, Objects[i].textures.ambientMemory, nullptr);
-			vkFreeMemory(device, Objects[i].textures.diffuseMemory, nullptr);
-			vkFreeMemory(device, Objects[i].textures.specularMemory, nullptr);
 
 			for (size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; j++) {
 				for (size_t u = 0; u < Objects[i].uniformBuffers.size(); u++)
 				{
-					vkDestroyBuffer(device, Objects[i].uniformBuffers[u][j], nullptr);
+					if (Objects[i].uniformBuffers[u][j] != VK_NULL_HANDLE) {
+						vkDestroyBuffer(device, Objects[i].uniformBuffers[u][j], nullptr);
+						Objects[i].uniformBuffers[u][j] = VK_NULL_HANDLE;
+					}
 				}
 				for (size_t u = 0; u < Objects[i].uniformBuffersMemory.size(); u++)
 				{
-					vkFreeMemory(device, Objects[i].uniformBuffersMemory[u][j], nullptr);
+					if (Objects[i].uniformBuffersMemory[u][j] != VK_NULL_HANDLE) {
+						vkFreeMemory(device, Objects[i].uniformBuffersMemory[u][j], nullptr);
+						Objects[i].uniformBuffersMemory[u][j] = VK_NULL_HANDLE;
+					}
 				}
 			}
+
+			// //Destroy the vertex and index buffers
+			//if (Objects[i].vertexBuffer != VK_NULL_HANDLE) {
+			//	vkDestroyBuffer(device, Objects[i].vertexBuffer, nullptr);
+			//	vkFreeMemory(device, Objects[i].vertexBufferMemory, nullptr);
+			//	Objects[i].vertexBuffer = VK_NULL_HANDLE;
+			//	Objects[i].vertexBufferMemory = VK_NULL_HANDLE;
+			//}
+			//if (Objects[i].indexBuffer != VK_NULL_HANDLE) {
+			//	vkDestroyBuffer(device, Objects[i].indexBuffer, nullptr);
+			//	vkFreeMemory(device, Objects[i].indexBufferMemory, nullptr);
+			//	Objects[i].indexBuffer = VK_NULL_HANDLE;
+			//	Objects[i].indexBufferMemory = VK_NULL_HANDLE;
+			//}
+
+			// Destroy the descriptor sets
+			//for (size_t j = 0; j < Objects[i].descriptorSets.size(); j++) {
+			//	vkFreeDescriptorSets(device, Objects[i].pipeline->descriptorPool, 1, &Objects[i].descriptorSets[j]);
+			//}
+			//Objects[i].descriptorSets.clear();
+			// Destroy the pipeline and descriptor set layout
+
+
+
+
+			//Objects[i].uniformBuffers.clear();
+			//Objects[i].uniformBuffersMemory.clear();
+		}
+
+		for (size_t i = 0; i < objectCreationBuffers.size(); i++)
+		{
+		
+			if (objectCreationBuffers[i].buffer != VK_NULL_HANDLE) {
+				vkDestroyBuffer(device, objectCreationBuffers[i].buffer, nullptr);
+				objectCreationBuffers[i].buffer = VK_NULL_HANDLE;
+			}
+			if (objectCreationBuffers[i].memory != VK_NULL_HANDLE) {
+				vkFreeMemory(device, objectCreationBuffers[i].memory, nullptr);
+				objectCreationBuffers[i].memory = VK_NULL_HANDLE;
+			}
+			objectCreationBuffers[i].buffer = VK_NULL_HANDLE;
+			objectCreationBuffers[i].memory = VK_NULL_HANDLE;
+		
 		}
 
 		for (auto& pipeline : Pipelines) {
@@ -175,37 +317,20 @@ namespace Tokucu {
 			vkDestroyPipelineLayout(device, pipeline->pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, pipeline->descriptorSetLayout, nullptr);
 			vkDestroyDescriptorPool(device, pipeline->descriptorPool, nullptr);
+			//delete pipeline;	
 		}
 
-		// Ensure the buffer is valid before destruction
-		vkDestroyBuffer(device, Objects[0].vertexBuffer, nullptr);
-		Objects[0].vertexBuffer = VK_NULL_HANDLE;
+		
 
-		vkFreeMemory(device, Objects[0].vertexBufferMemory, nullptr);
-		Objects[0].vertexBufferMemory = VK_NULL_HANDLE;
-
-		vkDestroyBuffer(device, Objects[0].indexBuffer, nullptr);
-		Objects[0].indexBuffer = VK_NULL_HANDLE;
-
-		vkFreeMemory(device, Objects[0].indexBufferMemory, nullptr);
-		Objects[0].indexBufferMemory = VK_NULL_HANDLE;
-
-		vkDestroyBuffer(device, Objects[1].vertexBuffer, nullptr);
-		Objects[1].vertexBuffer = VK_NULL_HANDLE;
-
-		vkFreeMemory(device, Objects[1].vertexBufferMemory, nullptr);
-		Objects[1].vertexBufferMemory = VK_NULL_HANDLE;
-
-		vkDestroyBuffer(device, Objects[1].indexBuffer, nullptr);
-		Objects[1].indexBuffer = VK_NULL_HANDLE;
-
-		vkFreeMemory(device, Objects[1].indexBufferMemory, nullptr);
-		Objects[1].indexBufferMemory = VK_NULL_HANDLE;
 		// After destroying all buffers, clear the list
-		Objects.clear();
+		//Objects.clear();
 
 		vkDestroyRenderPass(device, shadowRenderPass, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
+		vkDestroyRenderPass(device, renderPassHDR, nullptr);
+		vkDestroyRenderPass(device, BRDFRenderPass, nullptr);
+
+
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
@@ -216,11 +341,14 @@ namespace Tokucu {
 		vkDestroyCommandPool(device, commandPool, nullptr);
 		vkDestroyDevice(device, nullptr);
 
+
 		if (enableValidationLayers) {
 			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 		}
 		vkDestroySurfaceKHR(instance, surface, nullptr);
 		vkDestroyInstance(instance, nullptr);
+
+		//b_cubeconvulation = false;
 		TKC_CORE_INFO("Cleanup Completed");
 	}
 	void VulkanRendererAPI::DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
@@ -297,7 +425,6 @@ namespace Tokucu {
 		glfwWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
 		framebufferResized = true;
 	}
-
 
 	void VulkanRendererAPI::createInstance() {
 		if (enableValidationLayers && !checkValidationLayerSupport()) {
@@ -497,7 +624,11 @@ namespace Tokucu {
 		}
 
 		for (auto imageView : swapChainImageViews) {
-			vkDestroyImageView(device, imageView, nullptr);
+
+			if (imageView != VK_NULL_HANDLE) {
+				vkDestroyImageView(device, imageView, nullptr);
+				imageView = VK_NULL_HANDLE;
+			}
 		}
 		vkDestroySwapchainKHR(device, swapChain, nullptr);
 	}
@@ -929,7 +1060,7 @@ namespace Tokucu {
 			{
 				multisampling.rasterizationSamples = msaaSamples;
 				multisampling.sampleShadingEnable = VK_TRUE; // enable sample shading in the pipeline
-				multisampling.minSampleShading = .2f; // min fraction for sample shading; closer to one is smooth
+				multisampling.minSampleShading = .2f; // min fraction for sample shading
 			}
 
 			VkPipelineColorBlendAttachmentState colorBlendAttachment{};
@@ -944,9 +1075,6 @@ namespace Tokucu {
 				colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
 				colorBlending.attachmentCount = 0;  // No color attachments
 				colorBlending.pAttachments = nullptr;
-				//rasterizer.depthBiasEnable = VK_TRUE;
-				//rasterizer.depthBiasConstantFactor = 1.25f; // Adjust as needed
-				//rasterizer.depthBiasSlopeFactor = 1.75f; // Adjust as needed
 			}
 			else
 			{
@@ -973,7 +1101,7 @@ namespace Tokucu {
 			VkPushConstantRange pushConstantRange{};
 			pushConstantRange.stageFlags = VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 			pushConstantRange.offset = 0;
-			pushConstantRange.size = sizeof(int); // 64 + 16 bytes
+			pushConstantRange.size = sizeof(int);
 
 			std::vector<VkDynamicState> dynamicStates = {
 				VK_DYNAMIC_STATE_VIEWPORT,
@@ -1033,8 +1161,8 @@ namespace Tokucu {
 				pipelineInfo.renderPass = BRDFRenderPass;
 			}
 			pipelineInfo.subpass = 0;
-			pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
-			pipelineInfo.basePipelineIndex = -1; // Optional
+			pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; 
+			pipelineInfo.basePipelineIndex = -1; 
 
 			if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline->pipeline) != VK_SUCCESS) {
 				throw std::runtime_error("failed to create graphics pipeline!");
@@ -1143,7 +1271,7 @@ namespace Tokucu {
 		}
 	}
 
-	VkFramebuffer VulkanRendererAPI::createPrefilterFrameBuffer(uint16_t width, uint16_t height, uint16_t miplevel)
+	/*VkFramebuffer VulkanRendererAPI::createPrefilterFrameBuffer(uint16_t width, uint16_t height, uint16_t miplevel)
 	{
 		prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
 		//When creating a framebuffer, each attachment must reference only a single mip level.
@@ -1162,7 +1290,7 @@ namespace Tokucu {
 			throw std::runtime_error("failed to create framebuffer!");
 		}
 		return prefilterMapFramebuffer;
-	}
+	}*/
 
 	void VulkanRendererAPI::createCommandPool() {
 		QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
@@ -1292,8 +1420,8 @@ namespace Tokucu {
 		memcpy(data, vertexData.data(), (size_t)bufferSize);
 		vkUnmapMemory(device, stagingBufferMemory);
 
-		VkBuffer vertexBuffer;
-		VkDeviceMemory vertexBufferMemory;
+		VkBuffer vertexBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
 
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
@@ -1314,8 +1442,8 @@ namespace Tokucu {
 		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
 		memcpy(data, intexData.data(), (size_t)bufferSize);
 		vkUnmapMemory(device, stagingBufferMemory);
-		VkBuffer indexBuffer;
-		VkDeviceMemory indexBufferMemory;
+		VkBuffer indexBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
@@ -1328,55 +1456,64 @@ namespace Tokucu {
 	void VulkanRendererAPI::createObject() {
 		BufferData vertexData;
 		BufferData indexData;
-		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+		
 		vertexData = createVertexBuffer(cubeVertices);
 		indexData = createIndexBuffer(cubeIndices);
+		BufferData planeVertexData = createVertexBuffer(secondVertices);
+		BufferData planeIndexData = createIndexBuffer(secondIndices);
+		objectCreationBuffers.push_back(planeVertexData);
+		objectCreationBuffers.push_back(vertexData);
+		objectCreationBuffers.push_back(indexData);
 
-		//realCube = { "realCube", cubeVertices, cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt,
+		//realCube = { "realCube", cubeVertices, cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt,
 		//	{{"ambient","textures/Lambda.jpg"},{"diffuse","textures/Lambda.jpg"},{"specular","textures/LambdaSpecular.jpg"},{"normal","textures/defaultNormal.jpg"}} };
 		//Objects.push_back(realCube);
 
-		VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		Objects.push_back(base);
 
-		//VulkanObject top = { "top", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		//VulkanObject top = { "top", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(top);
-		
-		//VulkanObject right = { "right", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		//
+		//VulkanObject right = { "right", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(right);
 		//
-		//VulkanObject left = { "left", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		//VulkanObject left = { "left", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(left);
 		//
-		//VulkanObject front = { "front", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		//VulkanObject front = { "front", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(front);
 		//
-		//VulkanObject back = { "back", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,std::nullopt };
+		//VulkanObject back = { "back", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(back);
 
-		VulkanObject pointLight1 = { "pointLight1", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline2,std::nullopt };
+		VulkanObject pointLight1 = { "pointLight1", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline2,false,std::nullopt };
 		Objects.push_back(pointLight1);
 
-		VulkanObject pointLight2 = { "pointLight2", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline2,std::nullopt };
+		VulkanObject pointLight2 = { "pointLight2", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline2,false,std::nullopt };
 		Objects.push_back(pointLight2);
 
-		VulkanObject skybox = { "skyBox", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineSkybox,std::nullopt };
+		VulkanObject skybox = { "skyBox", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineSkybox,false,std::nullopt };
 		Objects.push_back(skybox);
 
-		VulkanObject skyboxHDR = { "skyBoxHDR", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineSkyboxHDR,std::nullopt,
-		{{"skyboxHDR","assets/textures/qwantani_noon_4k.hdr"}} };
+		VulkanObject skyboxHDR = { "skyBoxHDR", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineSkyboxHDR,false,std::nullopt,
+		{{"skyboxHDR","assets/textures/brown_photostudio_02_4k.hdr"}} };
 		Objects.push_back(skyboxHDR);
 
-		VulkanObject cubeConv = { "cubeConv", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineCubeConv,std::nullopt };
+		VulkanObject cubeConv = { "cubeConv", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineCubeConv,false,std::nullopt };
 		Objects.push_back(cubeConv);
 
-		VulkanObject prefilterCube = { "prefilterCube", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelinePrefilter,std::nullopt };
+		VulkanObject prefilterCube = { "prefilterCube", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelinePrefilter,false,std::nullopt };
 		Objects.push_back(prefilterCube);
 
-		VulkanObject BRDFLud = { "BRDFLud", secondVertices,secondIndices, createVertexBuffer(secondVertices).buffer, createVertexBuffer(secondVertices).memory,createIndexBuffer(secondIndices).buffer, createIndexBuffer(secondIndices).memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineBRDF,std::nullopt };
+		VulkanObject BRDFLud = { "BRDFLud", secondVertices,secondIndices, planeVertexData.buffer, planeVertexData.memory,planeIndexData.buffer, planeIndexData.memory,
+			getBindingDescription() , getAttributeDescriptions(),&m_PipelineBRDF,false,std::nullopt };
 		Objects.push_back(BRDFLud);
+
+		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+
 	}
 
 	void VulkanRendererAPI::createModel(std::string modelName, std::string modelLocation, std::string textureLocation) {
@@ -1388,6 +1525,9 @@ namespace Tokucu {
 			auto& mesh = model.meshes[i];
 			BufferData vertexData = createVertexBuffer(mesh.vertices);
 			BufferData indexData = createIndexBuffer(mesh.indices);
+
+			objectCreationBuffers.push_back(vertexData);
+			objectCreationBuffers.push_back(indexData);
 
 			std::string materialName = mesh.materialName;
 			std::cout << "Processing material: " << materialName << std::endl;
@@ -1405,6 +1545,7 @@ namespace Tokucu {
 				getBindingDescription(),
 				getAttributeDescriptions(),
 				&m_Pipeline,
+				true,
 				modelLocation,
 				materialTextureLocations // Assign per-mesh materials
 			};
@@ -1560,8 +1701,8 @@ namespace Tokucu {
 					}
 				}
 
-				VkBuffer stagingBuffer;
-				VkDeviceMemory stagingBufferMemory;
+				VkBuffer stagingBuffer = VK_NULL_HANDLE;
+				VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
 				createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 				void* data;
@@ -1570,14 +1711,15 @@ namespace Tokucu {
 				vkUnmapMemory(device, stagingBufferMemory);
 
 				stbi_image_free(pixels);
-				VkImage textureImage;
-				VkDeviceMemory textureImageMemory;
+
+				VkImage textureImage = VK_NULL_HANDLE;
+				VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
 
 				createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory, 1);
 				transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
 				copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
-				generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-
+				//generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+				transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
 				vkDestroyBuffer(device, stagingBuffer, nullptr);
 				vkFreeMemory(device, stagingBufferMemory, nullptr);
 
@@ -1606,7 +1748,10 @@ namespace Tokucu {
 					object.textures.specularMemory = textureImageMemory;
 					object.textures.imageViews[3] = textureImageView;
 				}
-				vkDestroyImage(device, textureImage, nullptr);
+				textureImages.push_back(textureImage);
+				textureImagesView.push_back(textureImageView);
+				textureImagesMemory.push_back(textureImageMemory);
+
 			}
 		}
 	}
@@ -2074,7 +2219,29 @@ namespace Tokucu {
 				VkRenderPassBeginInfo prefilterRenderPassInfo{};
 				prefilterRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 				prefilterRenderPassInfo.renderPass = renderPassHDR;
-				VkFramebuffer prefilterMapFramebuffer = createPrefilterFrameBuffer(mipWidth, mipHeight, mip);
+				//VkFramebuffer prefilterMapFramebuffer = createPrefilterFrameBuffer(mipWidth, mipHeight, mip);
+
+				prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
+				//When creating a framebuffer, each attachment must reference only a single mip level.
+				
+				VkImageView prefilterMapTempView = createCubemapImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip);
+				
+				// Create Framebuffer for prefilter map
+				VkFramebuffer prefilterMapFramebuffer = VK_NULL_HANDLE;
+				
+				VkFramebufferCreateInfo prefilterFramebufferInfo{};
+				prefilterFramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+				prefilterFramebufferInfo.renderPass = renderPassHDR;
+				prefilterFramebufferInfo.attachmentCount = 1;
+				prefilterFramebufferInfo.pAttachments = &prefilterMapTempView;
+				prefilterFramebufferInfo.width = mipWidth;
+				prefilterFramebufferInfo.height = mipHeight;
+				prefilterFramebufferInfo.layers = 6;
+				if (vkCreateFramebuffer(device, &prefilterFramebufferInfo, nullptr, &prefilterMapFramebuffer) != VK_SUCCESS) {
+					throw std::runtime_error("failed to create framebuffer!");
+				}
+				prefilterMapFramebuffers.push_back(prefilterMapFramebuffer);
+				prefilterMapTempViews.push_back(prefilterMapTempView);
 				prefilterRenderPassInfo.framebuffer = prefilterMapFramebuffer;
 				prefilterRenderPassInfo.renderArea.extent.width = mipWidth;
 				prefilterRenderPassInfo.renderArea.extent.height = mipHeight;
@@ -2119,7 +2286,6 @@ namespace Tokucu {
 				}
 				vkCmdEndRenderPass(commandBuffer);
 				transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
-				//vkDestroyFramebuffer(device, prefilterMapFramebuffer, nullptr);
 			}
 			prefilterMapView = createCubemapImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0);
 			b_cubeconvulation = true;
@@ -2149,9 +2315,9 @@ namespace Tokucu {
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipeline);
 				vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 				vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-				VkBuffer vertexBuffers[] = { object.vertexBuffer };
+				//VkBuffer vertexBuffers[] = { object.vertexBuffer };
 
-				vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+				vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
 				vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
 				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
@@ -2199,12 +2365,12 @@ namespace Tokucu {
 		glm::vec3 LightSourcePosition2(5 * cos(time), 0.0f, 5 * sin(time));
 
 		objectTransformations["Shotgun"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -3.0f, 5.0f));
-		objectTransformations["Helmet"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -80.0f, 5.0f));
+		objectTransformations["Helmet"] = glm::translate(glm::mat4(1.0f), glm::vec3(7.0f, -20.0f, 0.0f));
 		//objectTransformations["Shotgun"] = glm::scale(objectTransformations["Shotgun"], glm::vec3(0.1));
-		objectTransformations["Helmet"] = glm::scale(objectTransformations["Helmet"], glm::vec3(0.5));
+		objectTransformations["Helmet"] = glm::scale(objectTransformations["Helmet"], glm::vec3(0.1));
 		//objectTransformations["Shotgun"] = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 		//objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-5.0f, -3.0f, 5.0f));
-		objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-5, -6.0f, 0));
+		objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-7, -6.0f, 0));
 
 		objectTransformations["target"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.f));
 		objectTransformations["realCube"] = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -2683,8 +2849,8 @@ namespace Tokucu {
 		barrier.subresourceRange.baseArrayLayer = 0;
 		barrier.subresourceRange.layerCount = layerCount;
 
-		VkPipelineStageFlags sourceStage;
-		VkPipelineStageFlags destinationStage;
+		VkPipelineStageFlags sourceStage = 0;
+		VkPipelineStageFlags destinationStage = 0;
 
 		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
 			barrier.srcAccessMask = 0;
@@ -2724,7 +2890,7 @@ namespace Tokucu {
 
 		vkCmdPipelineBarrier(
 			commandBuffer,
-			sourceStage, destinationStage,
+			sourceStage , destinationStage,
 			0,
 			0, nullptr,
 			0, nullptr,

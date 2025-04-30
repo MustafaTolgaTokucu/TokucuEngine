@@ -10,6 +10,8 @@ add_executable(Sandbox ${SANDBOX_SRC})
 
 target_include_directories(Sandbox PRIVATE src)
 
+target_compile_definitions(Sandbox PRIVATE TKC_PLATFORM_WINDOWS=1)
+
 # Link against Tokucu
 target_link_libraries(Sandbox PRIVATE TokucuEngine)
 

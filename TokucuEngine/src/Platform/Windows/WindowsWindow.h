@@ -29,7 +29,6 @@ namespace Tokucu {
 		void processInput(GLFWwindow* window);
 		void mouse_callback(double xpos, double ypos);
 
-
 	private:
 		virtual void Init(const WindowProps& props);
 		virtual void Shutdown();
@@ -57,7 +56,6 @@ namespace Tokucu {
 		};
 
 		WindowData m_Data;
-		
 		
 	};
 

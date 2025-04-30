@@ -7,28 +7,32 @@ file(GLOB_RECURSE TOKUCUENGINE_SRC CONFIGURE_DEPENDS
 )
 
 file(GLOB_RECURSE VENDOR_SRC CONFIGURE_DEPENDS
-    "vendor/imgui/*.cpp"
+    "vendor*.cpp"
+    "vendor*.h"
+    "vendor*.c"
 )
 
 # Organize Visual Studio folders (optional but pro-looking)
-source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source Files" FILES ${TOKUCU_SRC})
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source Files" FILES ${TOKUCUENGINE_SRC})
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/vendor" PREFIX "Vendor" FILES ${VENDOR_SRC})
 
 add_library(TokucuEngine STATIC ${TOKUCUENGINE_SRC})
 
 target_include_directories(TokucuEngine PUBLIC src)
+target_compile_definitions(TokucuEngine PRIVATE TKC_PLATFORM_WINDOWS=1)
 
-# Link third-party libraries here if the engine needs them
-# Example:
-target_link_libraries(TokucuEngine PUBLIC GLFW)
-target_link_libraries(TokucuEngine PUBLIC GLAD)
-target_link_libraries(TokucuEngine PUBLIC Assimp)
+#third-party dependencies
+target_link_libraries(TokucuEngine
+    PUBLIC glfw
+    PUBLIC assimp
+)
 
 # Include your engine and vendor headers
-target_include_directories(Tokucu PUBLIC
+target_include_directories(TokucuEngine PUBLIC
     src
     vendor
 )
 
 # Precompiled header
-target_precompile_headers(Tokucu PRIVATE src/tkcpch.h)
+target_precompile_headers(TokucuEngine PRIVATE src/tkcpch.h)
+set_source_files_properties(glad.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

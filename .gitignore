@@ -2,7 +2,6 @@
 build/
 bin/
 bin-int/
-Sandbox/assets/models/
 Sandbox/assets/textures/
 .vs/
 

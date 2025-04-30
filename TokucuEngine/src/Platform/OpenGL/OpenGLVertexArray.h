@@ -26,10 +26,6 @@ namespace Tokucu {
 		uint32_t index = 0;
 		std::vector<std::shared_ptr<VertexBuffer>> m_VertexBuffers;
 		std::shared_ptr<IndexBuffer> m_IndexBuffer;
-
-
-		
-
 	};
 
 }

@@ -7,7 +7,7 @@ namespace Tokucu{
 		currentFrame = glfwGetTime();
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;
-		cameraSpeed = 0.0005f * deltaTime;
+		cameraSpeed = 0.005f * deltaTime;
 		beginFront = Front;
 		/*direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
 		direction.y = sin(glm::radians(pitch));

@@ -12,7 +12,6 @@
 
 namespace Tokucu
 {
-	
 	static bool s_GLFWInitialized = false;
 	
 	static void GLFWErrorCallback(int error, const char* description)
@@ -26,15 +25,11 @@ namespace Tokucu
 
 	WindowsWindow::WindowsWindow(const WindowProps& props)
 	{
-		
-
 		Init(props);
 	}
 
 	WindowsWindow::~WindowsWindow()
 	{
-		
-
 		Shutdown();
 	}
 
@@ -121,8 +116,6 @@ namespace Tokucu
 		m_Data.Width = props.Width;
 		m_Data.Height = props.Height;
 
-		
-
 		TKC_CORE_INFO("Creating window {0} ({1}, {2})", props.Title, props.Width, props.Height);
 
 		if (!s_GLFWInitialized)
@@ -134,7 +127,6 @@ namespace Tokucu
 			glfwSetErrorCallback(GLFWErrorCallback);
 			s_GLFWInitialized = true;
 		}
-
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -148,9 +140,6 @@ namespace Tokucu
 		
 		previousTime = glfwGetTime();
 		frameCount = 0;
-
-
-		
 		
 		glfwSetWindowUserPointer(m_Window, &m_Data);
 
@@ -247,15 +236,11 @@ namespace Tokucu
 				instance->mouse_callback(xPos, yPos);
 				
 			});
-		
 	}
 
 	void WindowsWindow::Shutdown()
 		{
-			
-
 			glfwDestroyWindow(m_Window);
-		
 		}
 
 		void WindowsWindow::OnUpdate()

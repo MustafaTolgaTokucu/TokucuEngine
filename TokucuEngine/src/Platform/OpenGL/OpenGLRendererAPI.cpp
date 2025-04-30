@@ -5,7 +5,8 @@
 
 namespace Tokucu {
 
-
+	//Main Renderer for OPENGL 
+	//TODO: Correct abstraction
 
 
 	void OpenGLRendererAPI::Init(const std::shared_ptr<Window>& window)
