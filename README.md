@@ -39,14 +39,14 @@ Simple Vulkan-based 3D renderer written in C++. Designed for learning basics of 
 
 # Build instructions
 ## Prerequisites
--C++20 compatible compiler
--Vulkan SDK & FBX SDK
--CMake
+- C++20 compatible compiler
+- Vulkan SDK & FBX SDK
+- CMake
 
-git clone https://github.com/MustafaTolgaTokucu/TokucuEngine.git
-cd TokucuEngine
-mkdir build && cd build
-cmake ..
+- git clone https://github.com/MustafaTolgaTokucu/TokucuEngine.git
+- cd TokucuEngine
+- mkdir build && cd build
+- cmake ..
 
 Textures should be downloaded in Sandbox/assets/, and assets folder should be copied in build/Sandbox/debug/ for renderer to work properly.
 
