@@ -42,7 +42,8 @@ Simple Vulkan-based 3D renderer written in C++. Designed for learning basics of 
 - C++20 compatible compiler
 - Vulkan SDK & FBX SDK
 - CMake
-
+  
+## Build
 - git clone https://github.com/MustafaTolgaTokucu/TokucuEngine.git
 - cd TokucuEngine
 - mkdir build && cd build
