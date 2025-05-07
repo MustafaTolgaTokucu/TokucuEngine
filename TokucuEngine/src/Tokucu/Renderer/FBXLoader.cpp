@@ -145,6 +145,11 @@ namespace Tokucu {
     }
 
     void FBXLoader::CalculateTangents(ModelMesh& mesh) {
+        // Initialize all tangents to zero first
+        for (auto& vertex : mesh.vertices) {
+            vertex.Tangent = glm::vec3(0.0f);
+        }
+
         for (size_t i = 0; i < mesh.indices.size(); i += 3) {
             Vertex& v0 = mesh.vertices[mesh.indices[i]];
             Vertex& v1 = mesh.vertices[mesh.indices[i + 1]];
@@ -168,9 +173,13 @@ namespace Tokucu {
             v2.Tangent += tangent;
         }
 
-        // Normalize tangents
+        // Normalize and orthogonalize tangents
         for (auto& vertex : mesh.vertices) {
+            // Normalize the tangent
             vertex.Tangent = glm::normalize(vertex.Tangent);
+            
+            // Gram-Schmidt orthogonalization
+            vertex.Tangent = glm::normalize(vertex.Tangent - glm::dot(vertex.Tangent, vertex.Normal) * vertex.Normal);
         }
     }
 

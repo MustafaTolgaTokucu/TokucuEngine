@@ -11,7 +11,7 @@
 
 namespace Tokucu {
 #ifdef NDEBUG
-	const bool enableValidationLayers = true;
+	const bool enableValidationLayers = false;
 #else
 	const bool enableValidationLayers = true;
 #endif
@@ -1469,9 +1469,9 @@ namespace Tokucu {
 		//	{{"ambient","textures/Lambda.jpg"},{"diffuse","textures/Lambda.jpg"},{"specular","textures/LambdaSpecular.jpg"},{"normal","textures/defaultNormal.jpg"}} };
 		//Objects.push_back(realCube);
 
-		VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
-		Objects.push_back(base);
-
+		//VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
+		//Objects.push_back(base);
+		//
 		//VulkanObject top = { "top", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(top);
 		//
@@ -1497,7 +1497,7 @@ namespace Tokucu {
 		Objects.push_back(skybox);
 
 		VulkanObject skyboxHDR = { "skyBoxHDR", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineSkyboxHDR,false,std::nullopt,
-		{{"skyboxHDR","assets/textures/brown_photostudio_02_4k.hdr"}} };
+		{{"skyboxHDR","assets/textures/qwantani_noon_4k.hdr"}} };
 		Objects.push_back(skyboxHDR);
 
 		VulkanObject cubeConv = { "cubeConv", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_PipelineCubeConv,false,std::nullopt };
@@ -1510,9 +1510,9 @@ namespace Tokucu {
 			getBindingDescription() , getAttributeDescriptions(),&m_PipelineBRDF,false,std::nullopt };
 		Objects.push_back(BRDFLud);
 
-		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
 		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 	}
 
