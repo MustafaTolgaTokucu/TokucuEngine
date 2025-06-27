@@ -1,11 +1,8 @@
 #pragma once
 #include "Tokucu/Renderer/RendererAPI.h"
+#include "platform/Vulkan/VulkanCore.h"
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
-#include "vulkan/vulkan.h"
-#include "optional"
+#include <optional>
 #include <fstream>
 
 //libs attached while vulkan implementation
@@ -58,20 +55,6 @@ namespace Tokucu {
 		float pl_linear = 0.09f;
 		float pl_quadratic = 0.032f;
 		float pl_pointlightNumber = 0.0f;
-	};
-
-	struct QueueFamilyIndices {
-		std::optional<uint32_t> graphicsFamily = std::nullopt;
-		std::optional<uint32_t> presentFamily = std::nullopt;
-		bool isComplete() {
-			return graphicsFamily.has_value() && presentFamily.has_value();
-		}
-	};
-
-	struct SwapChainSupportDetails {
-		VkSurfaceCapabilitiesKHR capabilities = {};
-		std::vector<VkSurfaceFormatKHR> formats = {};
-		std::vector<VkPresentModeKHR> presentModes = {};
 	};
 
 	struct Pipeline {
@@ -146,26 +129,10 @@ namespace Tokucu {
 		//////////////////////////////////
 		///VULKAN FUNCTIONS
 		/////////////////////////////////
-		void createInstance();
-		void pickPhysicalDevice();
-		bool checkValidationLayerSupport();
 		void createSwapChain();
 		void recreateSwapChain();
 		void cleanupSwapChain();
-		std::vector<const char*> getRequiredExtensions();
-		static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType,
-			const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
-		void setupDebugMessenger();
-		void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
-		VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, 
-			VkDebugUtilsMessengerEXT* pDebugMessenger);
-		void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator);
-		bool isDeviceSuitable(VkPhysicalDevice device);
-		bool checkDeviceExtensionSupport(VkPhysicalDevice device);
-		void createLogicalDevice();
-		void createSurface();
-		QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
-		SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+		
 		VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
 		VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
 		VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
@@ -205,7 +172,6 @@ namespace Tokucu {
 		VkFormat findDepthFormat();
 		bool hasStencilComponent(VkFormat format);
 		void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
-		VkSampleCountFlagBits getMaxUsableSampleCount();
 		void createColorResources();
 		//////////////////////////
 		//MTT Additional Functions
@@ -228,11 +194,14 @@ namespace Tokucu {
 		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 		const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
 		const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+		//TEST FOR NOW
 		VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 		VkDevice device = VK_NULL_HANDLE;
 		VkQueue graphicsQueue = VK_NULL_HANDLE;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		VkQueue presentQueue = VK_NULL_HANDLE;
+		
 
 		VkSwapchainKHR swapChain = VK_NULL_HANDLE;
 		std::vector<VkImage> swapChainImages = {};
@@ -261,20 +230,21 @@ namespace Tokucu {
 		std::vector<Vertex> vertices = {};
 		std::vector<uint32_t> indices = {};
 
+		//added to eCS
 		std::vector<glm::vec3> cubePositions;
 		std::vector<Vertex> secondVertices;
 		std::vector<uint32_t> secondIndices;
-
+		//added to ECS
 		std::vector<Vertex> cubeVertices;
 		std::vector<uint32_t> cubeIndices;
-
+		//added to ECS
 		std::vector<BufferData> objectCreationBuffers = {};
 
 		std::unordered_map<std::string, glm::mat4> objectTransformations; //Holding transformation information for each object
 		std::unordered_map<std::string, glm::vec3> objectColor;
 
 		std::vector<LightAttributes> pointLights = { pointLight1,pointLight2 };
-
+		//added to ECS
 		std::vector<Pipeline*> Pipelines;
 		Pipeline m_Pipeline;
 		Pipeline m_Pipeline2;
@@ -365,6 +335,10 @@ namespace Tokucu {
 		int shadowMapSize = 2048;
 		uint32_t mipLevels = 1.0;
 		VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+
+
+		//ABSTRACTION TEST MEMBERS
+		std::unique_ptr<VulkanCore> m_VulkanCore;
 	};
 
 }
