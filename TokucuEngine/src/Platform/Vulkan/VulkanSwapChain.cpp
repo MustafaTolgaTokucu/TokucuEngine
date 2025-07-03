@@ -114,9 +114,7 @@ namespace Tokucu {
 		swapChainFramebuffers.resize(swapChainImageViews.size());
 		for (size_t i = 0; i < swapChainImageViews.size(); i++) {
 			std::vector<VkImageView> attachments = { colorImageView,depthImageView,swapChainImageViews[i] };
-			VulkanFramebuffer framebuffer(device, renderPass, attachments, swapChainExtent.width, swapChainExtent.height, 1);
-			
-			swapChainFramebuffers[i] = framebuffer.createFramebuffers();
+			swapChainFramebuffers[i] = m_VulkanFramebuffer->createFramebuffers(renderPass, attachments, swapChainExtent.width, swapChainExtent.height, 1);
 		}
 	}
 

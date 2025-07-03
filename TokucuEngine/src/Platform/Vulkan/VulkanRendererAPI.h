@@ -12,42 +12,9 @@ namespace Tokucu {
 	class VulkanCreateImage;
 	class VulkanGraphicsPipeline;
 	class VulkanBuffer;
+	class VulkanFramebuffer;
 	
-	struct UniformBufferObject {
-		glm::mat4 model = glm::mat4(1.0f);
-		glm::mat4 view = glm::mat4(1.0f);
-		glm::mat4 proj = glm::mat4(1.0f);
-	};
-
-	struct ColorUniform {
-		glm::vec3 color = { 1.0f,1.0f,1.0f };
-	};
-
-	struct shadowUBO {
-		glm::mat4 pl_lightSpaceMatrix[6] = {};
-
-	};
-
-	struct lightIndexUBO {
-		int lightIndex = 0;
-	};
-
-	struct LightAttributes
-	{
-		alignas(16) glm::vec3 pl_color = { 1.0f,1.0f,1.0f };
-		alignas(16) glm::vec3 pl_position = { 0.0f,0.0f,0.0f };
-		alignas(16) glm::vec3 pl_ambient = { 0.2f,0.2f,0.2f };
-		alignas(16) glm::vec3 pl_diffuse = { 1.0f,1.0f,1.0f };
-		alignas(16) glm::vec3 pl_specular = { 1.0f,1.0f,1.0f };
-		alignas(16) glm::vec3 pl_viewpot = { 0.0f,0.0f,0.0f };
-		float pl_constant = 1.0f;
-		float pl_linear = 0.09f;
-		float pl_quadratic = 0.032f;
-		float pl_pointlightNumber = 0.0f;
-	};
-
 	
-
 
 	class VulkanRendererAPI : public RendererAPI
 	{
@@ -73,18 +40,13 @@ namespace Tokucu {
 		void createTextureSampler();
 
 		void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage);
-		void createSyncObjects();
+		
 		//Model Loading with assimp. (FBX is set to default for now) 
 		//ModelData loadModel(std::string modelLocation);
 		void createUniformBuffers();
 		void updateUniformBuffer(uint32_t currentImage);
 		void createDescriptorPool();
 		void createDescriptorSets();
-
-		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, int layerCount, uint32_t mipLevels, uint32_t baseMipLevel);
-		void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t baseArrayLayer);
-
-		void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
 
 		//////////////////////////
 		//MTT Additional Functions
@@ -113,17 +75,12 @@ namespace Tokucu {
 		VkRenderPass renderPassHDR = VK_NULL_HANDLE;
 		VkRenderPass BRDFRenderPass = VK_NULL_HANDLE;
 		
+		// Shadow and IBL framebuffers
 		VkFramebuffer shadowFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer HDRCubeFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer CubeConvolutionFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer BRDFFrameBuffer = VK_NULL_HANDLE;
-		std::vector<VkFramebuffer> prefilterMapFramebuffers = {};
-
-		//VkCommandPool commandPool = VK_NULL_HANDLE;
-		std::vector<VkCommandBuffer> commandBuffers = {};
-		std::vector<VkSemaphore> imageAvailableSemaphores = {};
-		std::vector<VkSemaphore> renderFinishedSemaphores = {};
-		std::vector<VkFence> inFlightFences = {};
+		std::vector<VkFramebuffer> prefilterMapFramebuffers;
 		
 		std::vector<Vertex> vertices = {};
 		std::vector<uint32_t> indices = {};
@@ -135,8 +92,7 @@ namespace Tokucu {
 		//added to ECS
 		std::vector<Vertex> cubeVertices;
 		std::vector<uint32_t> cubeIndices;
-		//added to ECS
-		std::vector<BufferData> objectCreationBuffers = {};
+		
 
 		std::unordered_map<std::string, glm::mat4> objectTransformations; //Holding transformation information for each object
 		std::unordered_map<std::string, glm::vec3> objectColor;
@@ -186,7 +142,7 @@ namespace Tokucu {
 		VkImage CubeConvolutionImage = VK_NULL_HANDLE;
 		VkImage prefilterMapImage = VK_NULL_HANDLE;
 		VkImage BRDFImage = VK_NULL_HANDLE;
-	
+
 		VkSampler textureSampler = VK_NULL_HANDLE;
 		VkSampler shadowSampler = VK_NULL_HANDLE;
 		VkSampler prefilterTextureSampler = VK_NULL_HANDLE;
@@ -207,13 +163,14 @@ namespace Tokucu {
 		uint32_t currentFrame = 0;
 		bool framebufferResized = false;
 
-		bool b_cubeconvulation = false;
-		float prefilterMipLevels = 1.0;
-		float prefilterMapResolution = 128.0;
-		float resizeMipLevels = 1.0;
-		int shadowMapSize = 2048;
+		// IBL and shadow configuration
 		uint32_t mipLevels = 1.0;
 		VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+		bool b_cubeconvulation = false;
+		uint32_t shadowMapSize = 2048;
+		uint32_t prefilterMipLevels = 5;
+		uint32_t prefilterMapResolution = 128;
+		uint32_t resizeMipLevels = 1;
 
 
 		//ABSTRACTION TEST MEMBERS
@@ -222,6 +179,9 @@ namespace Tokucu {
 		std::unique_ptr<VulkanCreateImage> m_VulkanCreateImage;
 		std::unique_ptr<VulkanGraphicsPipeline> m_VulkanGraphicsPipeline;
 		std::unique_ptr<VulkanBuffer> m_VulkanBuffer;
+		std::unique_ptr<VulkanFramebuffer> m_VulkanFramebuffer;
+		
+		// Manager classes moved to existing Vulkan classes
 	};
 
 }

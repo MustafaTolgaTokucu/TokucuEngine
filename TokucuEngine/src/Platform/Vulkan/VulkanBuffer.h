@@ -9,12 +9,26 @@ namespace Tokucu
 		VulkanBuffer(VulkanCore* vulkanCore, VkPhysicalDevice physicalDevice, VkDevice device)
 			: m_VulkanCore(vulkanCore), physicalDevice(physicalDevice), device(device) {
 			MAX_FRAMES_IN_FLIGHT = m_VulkanCore->getMaxFramesInFlight();
-			//graphicsQueue = m_VulkanCore->getGraphicsQueue();
 		}
+
 		~VulkanBuffer() {
-			if (commandPool != VK_NULL_HANDLE) {
-				vkDestroyCommandPool(device, commandPool, nullptr);
+			// Ensure device is idle before cleanup
+			if (device != VK_NULL_HANDLE) {
+				vkDeviceWaitIdle(device);
 			}
+			
+			// Free command buffers first
+			if (!commandBuffers.empty() && commandPool != VK_NULL_HANDLE && device != VK_NULL_HANDLE) {
+				vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+				commandBuffers.clear();
+			}
+			
+			// Then destroy command pool
+			if (commandPool != VK_NULL_HANDLE && device != VK_NULL_HANDLE) {
+				vkDestroyCommandPool(device, commandPool, nullptr);
+				commandPool = VK_NULL_HANDLE;
+			}
+			TKC_CORE_INFO("VulkanBuffer destroyed successfully");
 		}
 		void createCommandPool();
 		void createUniformBuffers(VulkanObject& object);
@@ -22,10 +36,35 @@ namespace Tokucu
 		BufferData createVertexBuffer(const std::vector<Vertex>& vertexData);
 		BufferData createIndexBuffer(const std::vector<uint32_t>& indexData);
 		void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+
+		void generateMipmaps(VkImage image, VkFormat format, int32_t width, int32_t height, uint32_t mipLevels);
+		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, int layerCount, uint32_t mipLevels, uint32_t baseMipLevel);
+		void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t baseArrayLayer);
+
 		void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 		VkCommandBuffer beginSingleTimeCommands();
 		void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+		//// Command recording functions
+		//void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage,
+		//	const std::vector<VulkanObject>& objects, const std::vector<LightAttributes>& lights,
+		//	VkRenderPass mainRenderPass, VkRenderPass shadowRenderPass, VkRenderPass hdrRenderPass, VkRenderPass brdfRenderPass,
+		//	const std::vector<VkFramebuffer>& swapChainFramebuffers, VkExtent2D swapChainExtent,
+		//	VkFramebuffer shadowFramebuffer, VkFramebuffer hdrFramebuffer, VkFramebuffer irradianceFramebuffer, 
+		//	VkFramebuffer brdfFramebuffer, const std::vector<VkFramebuffer>& prefilterFramebuffers,
+		//	bool& b_cubeconvulation, uint32_t shadowMapSize, uint32_t prefilterMipLevels);
+		//
+		//void recordRenderPass(VkCommandBuffer commandBuffer, VkRenderPass renderPass, VkFramebuffer framebuffer,
+		//	uint32_t width, uint32_t height, const std::vector<VkClearValue>& clearValues,
+		//	const std::function<void(VkCommandBuffer, uint32_t)>& renderFunction, uint32_t currentImage);
+		//
+		//void renderObjects(VkCommandBuffer commandBuffer, uint32_t currentImage, 
+		//	const std::vector<VulkanObject>& objects,
+		//	const std::vector<std::string>& pipelineNames, 
+		//	const std::function<void(VkCommandBuffer, const VulkanObject&, uint32_t)>& customRender = nullptr);
+		//
+		//void setupViewportAndScissor(VkCommandBuffer commandBuffer, uint32_t width, uint32_t height);
 
 		//Getters
 		VkCommandPool getCommandPool() const { return commandPool; }

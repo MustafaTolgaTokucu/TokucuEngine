@@ -197,6 +197,90 @@ namespace Tokucu
 			throw std::runtime_error("failed to create descriptor set layout!");
 		}
 	}
+
+	void VulkanGraphicsPipeline::createDescriptorPool(Pipeline* pipeline, uint32_t objectSize) {
+		std::vector<VkDescriptorPoolSize> poolSizes;
+		int iteration = 0;
+		for (auto& [type, flag] : pipeline->descriptorLayout) {
+			VkDescriptorPoolSize poolSize{};
+			poolSize.type = type;
+			poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * objectSize);
+			poolSizes.push_back(poolSize);
+			iteration++;
+		}
+		VkDescriptorPoolCreateInfo poolInfo{};
+		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolInfo.pPoolSizes = poolSizes.data();
+		poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * objectSize);
+
+		if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &pipeline->descriptorPool) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create descriptor pool!");
+		}
+	}
+
+	void VulkanGraphicsPipeline::createDescriptorSets(VulkanObject* object) {
+		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, object->pipeline->descriptorSetLayout);
+		VkDescriptorSetAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = object->pipeline->descriptorPool;
+		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		allocInfo.pSetLayouts = layouts.data();
+
+		object->descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+
+		if (vkAllocateDescriptorSets(device, &allocInfo, object->descriptorSets.data()) != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate descriptor sets!");
+		}
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			std::vector<VkWriteDescriptorSet> descriptorWrites;
+			descriptorWrites.clear();
+
+			for (size_t j = 0; j < object->pipeline->bufferSize.size(); j++)
+			{
+				object->pipeline->descriptionBufferInfo[j].first->buffer = object->uniformBuffers[j][i];
+				object->pipeline->descriptionBufferInfo[j].first->offset = 0;
+				object->pipeline->descriptionBufferInfo[j].first->range = object->pipeline->bufferSize[j];
+			}
+			for (size_t j = 0; j < object->pipeline->descriptionSampleInfo.size(); j++)
+			{
+				auto& info = object->pipeline->descriptionSampleInfo[j];
+				info.imageLayout = object->texturesInfo[j].imageLayout;
+				info.imageView = object->texturesInfo[j].imageView;
+				info.sampler = object->texturesInfo[j].sampler;
+			}
+			int binding = 0;
+			for (size_t j = 0; j < object->pipeline->descriptionBufferInfo.size(); j++)
+			{
+				VkWriteDescriptorSet descriptorWriteBuffer{};
+				descriptorWriteBuffer.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWriteBuffer.dstSet = object->descriptorSets[i];
+				descriptorWriteBuffer.dstBinding = binding;
+				descriptorWriteBuffer.dstArrayElement = 0;
+				descriptorWriteBuffer.descriptorType = object->pipeline->descriptorLayout[j].first;
+				descriptorWriteBuffer.descriptorCount = 1;
+				descriptorWriteBuffer.pBufferInfo = object->pipeline->descriptionBufferInfo[j].first;
+				descriptorWrites.push_back(descriptorWriteBuffer);
+				binding++;
+			}
+			for (size_t j = 0; j < object->pipeline->descriptionSampleInfoCount; j++)
+			{
+				auto& info = object->pipeline->descriptionSampleInfo[j];
+				VkWriteDescriptorSet descriptorWriteSample{};
+				descriptorWriteSample.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWriteSample.dstSet = object->descriptorSets[i];
+				descriptorWriteSample.dstBinding = binding;
+				descriptorWriteSample.dstArrayElement = 0;
+				descriptorWriteSample.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				descriptorWriteSample.descriptorCount = 1;
+				descriptorWriteSample.pImageInfo = &info;
+				descriptorWrites.push_back(descriptorWriteSample);
+				binding++;
+			}
+			std::cout << "writes size: " << descriptorWrites.size() << std::endl;
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+		}
+	}
 	//we need to read the shader files
 	VkShaderModule VulkanGraphicsPipeline::createShaderModule(const std::vector<char>& code) {
 		VkShaderModuleCreateInfo createInfo{};

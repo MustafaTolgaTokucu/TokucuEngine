@@ -17,17 +17,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image/stb_image.h"
 
-
-/// <summary>
-/// TODO: VulkanRendererAPI should be renamed to VulkanRenderer.
-/// This class is a temporary implementation of the Vulkan Renderer API.
-/// glfw will be used for vulcan core surface createion
-/// </summary>
-
 namespace Tokucu {
-
-	//TODO: Better abstraction for clarity
-
 	VulkanRendererAPI::VulkanRendererAPI()
 	{
 		secondVertices = {
@@ -115,10 +105,12 @@ namespace Tokucu {
 		MAX_FRAMES_IN_FLIGHT = m_VulkanCore->getMaxFramesInFlight();
 		//CORE abstraction done
 
-		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(), physicalDevice, device, surface);
+		
 		m_VulkanCreateImage = std::make_unique<VulkanCreateImage>(device, physicalDevice);
 		m_VulkanGraphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(m_VulkanCore.get(), device, physicalDevice);
 		m_VulkanBuffer = std::make_unique<VulkanBuffer>(m_VulkanCore.get(), physicalDevice, device);
+		m_VulkanFramebuffer = std::make_unique<VulkanFramebuffer>(device);
+		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(),m_VulkanFramebuffer.get() , physicalDevice, device, surface);
 
 		createRenderPass();
 		registerPipeline();
@@ -128,8 +120,8 @@ namespace Tokucu {
 		m_VulkanBuffer->createCommandPool();
 		createObject();
 		
-		createTextureImage();
 		createTextureSampler();
+		createTextureImage();
 
 		createUniformBuffers();
 
@@ -137,238 +129,181 @@ namespace Tokucu {
 		createDescriptorSets();
 
 		m_VulkanBuffer->createCommandBuffers();
-		createSyncObjects();
+		m_VulkanCore->createSyncObjects();
 	}
 	void VulkanRendererAPI::SetClearColor(const glm::vec4& color)
 	{
 	}
 	void VulkanRendererAPI::Clear()
 	{
+		// Ensure all operations are complete before cleanup
 		vkDeviceWaitIdle(device);
 
-		//
-		//vkDestroyImageView(device, colorImageView, nullptr);
-		//vkDestroyImage(device, colorImage, nullptr);
-		//vkFreeMemory(device, colorImageMemory, nullptr);
-		//
-		//vkDestroyImageView(device, depthImageView, nullptr);
-		//vkDestroyImage(device, depthImage, nullptr);
-		//vkFreeMemory(device, depthImageMemory, nullptr);
-		
-		vkDestroyImageView(device, shadowImageView, nullptr);
-		vkDestroyImage(device, shadowImage, nullptr);
-		vkFreeMemory(device, shadowImageMemory, nullptr);
-		
-		vkDestroyImageView(device, HDRCubeView, nullptr);
-		vkDestroyImage(device, HDRCubeImage, nullptr);
-		vkFreeMemory(device, HDRCubeImageMemory, nullptr);
-		
-		for (size_t i = 0; i < prefilterMapTempViews.size(); i++)
-		{
-			if (prefilterMapTempViews[i] != VK_NULL_HANDLE)
-			{
-				vkDestroyImageView(device, prefilterMapTempViews[i], nullptr);
-				prefilterMapTempViews[i] = VK_NULL_HANDLE;
+		// Destroy images, image views, and free memory
+		auto destroyImageSafe = [&](VkImage& img, VkDeviceMemory& mem) {
+			if (img != VK_NULL_HANDLE) {
+				vkDestroyImage(device, img, nullptr);
+				img = VK_NULL_HANDLE;
+			}
+			if (mem != VK_NULL_HANDLE) {
+				vkFreeMemory(device, mem, nullptr);
+				mem = VK_NULL_HANDLE;
+			}
+		};
+		auto destroyImageViewSafe = [&](VkImageView& view) {
+			if (view != VK_NULL_HANDLE) {
+				vkDestroyImageView(device, view, nullptr);
+				view = VK_NULL_HANDLE;
+			}
+		};
+		auto destroySamplerSafe = [&](VkSampler& sampler) {
+			if (sampler != VK_NULL_HANDLE) {
+				vkDestroySampler(device, sampler, nullptr);
+				sampler = VK_NULL_HANDLE;
+			}
+		};
+
+		destroyImageViewSafe(shadowImageView);
+		destroyImageSafe(shadowImage, shadowImageMemory);
+		destroyImageViewSafe(HDRCubeView);
+		destroyImageSafe(HDRCubeImage, HDRCubeImageMemory);
+		for (auto& view : prefilterMapTempViews) destroyImageViewSafe(view);
+		prefilterMapTempViews.clear();
+
+		for (auto& view : prefilterMapTempViews) {
+			if (view != VK_NULL_HANDLE) {
+				vkDestroyImageView(device, view, nullptr);
+				view = VK_NULL_HANDLE;
 			}
 		}
-		vkDestroyImageView(device, prefilterMapView, nullptr);
-		vkDestroyImage(device, prefilterMapImage, nullptr);
-		vkFreeMemory(device, prefilterMapImageMemory, nullptr);
+		prefilterMapTempViews.clear();
 		
-		vkDestroyImageView(device, BRDFImageView, nullptr);
-		vkDestroyImage(device, BRDFImage, nullptr);
-		vkFreeMemory(device, BRDFImageMemory, nullptr);
-		
-		vkDestroyImageView(device, skyboxImageView, nullptr);
-		vkDestroyImage(device, skyboxImage, nullptr);
-		vkFreeMemory(device, skyboxImageMemory, nullptr);
-		
-		vkDestroyImageView(device, skyboxHDRImageView, nullptr);
-		vkDestroyImage(device, skyboxHDRImage, nullptr);
-		vkFreeMemory(device, skyboxHDRImageMemory, nullptr);
-		
-		vkDestroyImageView(device, CubeConvolutionImageView, nullptr);
-		vkDestroyImage(device, CubeConvolutionImage, nullptr);
-		vkFreeMemory(device, CubeConvolutionImageMemory, nullptr);
-		
-		vkDestroySampler(device, textureSampler, nullptr);
-		vkDestroySampler(device, shadowSampler, nullptr);
-		vkDestroySampler(device, prefilterTextureSampler, nullptr);
+		destroyImageViewSafe(prefilterMapView);
+		destroyImageSafe(prefilterMapImage, prefilterMapImageMemory);
+		destroyImageViewSafe(BRDFImageView);
+		destroyImageSafe(BRDFImage, BRDFImageMemory);
+		destroyImageViewSafe(skyboxImageView);
+		destroyImageSafe(skyboxImage, skyboxImageMemory);
+		destroyImageViewSafe(skyboxHDRImageView);
+		destroyImageSafe(skyboxHDRImage, skyboxHDRImageMemory);
+		destroyImageViewSafe(CubeConvolutionImageView);
+		destroyImageSafe(CubeConvolutionImage, CubeConvolutionImageMemory);
 
-		for (auto texture : textureImages)
-		{
-			if (texture != VK_NULL_HANDLE)
-			{
+		destroySamplerSafe(textureSampler);
+		destroySamplerSafe(shadowSampler);
+		destroySamplerSafe(prefilterTextureSampler);
+
+		for (auto& texture : textureImages) {
+			if (texture != VK_NULL_HANDLE) {
 				vkDestroyImage(device, texture, nullptr);
 				texture = VK_NULL_HANDLE;
 			}
-			
 		}
-		for (auto textureMemory : textureImagesMemory)
-		{
-			if (textureMemory != VK_NULL_HANDLE)
-			{
+		textureImages.clear();
+		for (auto& textureMemory : textureImagesMemory) {
+			if (textureMemory != VK_NULL_HANDLE) {
 				vkFreeMemory(device, textureMemory, nullptr);
 				textureMemory = VK_NULL_HANDLE;
 			}
 		}
-		for (auto textureView : textureImagesView)
-		{
-			if (textureView != VK_NULL_HANDLE)
-			{
-				vkDestroyImageView(device, textureView, nullptr);
-				textureView = VK_NULL_HANDLE;
-			}
+		textureImagesMemory.clear();
+		for (auto& textureView : textureImagesView) {
+			destroyImageViewSafe(textureView);
 		}
+		textureImagesView.clear();
 
-		//cleanupSwapChain();
-
-		vkDestroyFramebuffer(device, shadowFrameBuffer, nullptr);
-		vkDestroyFramebuffer(device, HDRCubeFrameBuffer, nullptr);
-		vkDestroyFramebuffer(device, CubeConvolutionFrameBuffer, nullptr);
-		vkDestroyFramebuffer(device, BRDFFrameBuffer, nullptr);
-		for (size_t i = 0; i < prefilterMapFramebuffers.size(); i++)
-		{
-			vkDestroyFramebuffer(device, prefilterMapFramebuffers[i], nullptr);
+		// Framebuffers
+		vkDestroyFramebuffer(device, shadowFrameBuffer, nullptr); shadowFrameBuffer = VK_NULL_HANDLE;
+		vkDestroyFramebuffer(device, HDRCubeFrameBuffer, nullptr); HDRCubeFrameBuffer = VK_NULL_HANDLE;
+		vkDestroyFramebuffer(device, CubeConvolutionFrameBuffer, nullptr); CubeConvolutionFrameBuffer = VK_NULL_HANDLE;
+		vkDestroyFramebuffer(device, BRDFFrameBuffer, nullptr); BRDFFrameBuffer = VK_NULL_HANDLE;
+		for (auto& fb : prefilterMapFramebuffers) {
+			vkDestroyFramebuffer(device, fb, nullptr);
 		}
+		prefilterMapFramebuffers.clear();
 
-		for (int i = 0; i < Objects.size(); i++)
-		{
 
-			if(Objects[i].b_PBR == true )
-			{
-				for (size_t j = 0; j < Objects[i].textures.imageViews.size(); j++)
-				{
-					if (Objects[i].textures.imageViews[j] != VK_NULL_HANDLE) {
-						vkDestroyImageView(device, Objects[i].textures.imageViews[j], nullptr);
-						Objects[i].textures.imageViews[j] = VK_NULL_HANDLE;
-					}
-				}
-
-				if (Objects[i].textures.ambient != VK_NULL_HANDLE) {
-					vkDestroyImage(device, Objects[i].textures.ambient, nullptr);
-					vkFreeMemory(device, Objects[i].textures.ambientMemory, nullptr);
-					Objects[i].textures.ambient = VK_NULL_HANDLE;
-					Objects[i].textures.ambientMemory = VK_NULL_HANDLE;
-				}
-				if (Objects[i].textures.diffuse != VK_NULL_HANDLE) {
-					vkDestroyImage(device, Objects[i].textures.diffuse, nullptr);
-					vkFreeMemory(device, Objects[i].textures.diffuseMemory, nullptr);
-					Objects[i].textures.diffuse = VK_NULL_HANDLE;
-					Objects[i].textures.diffuseMemory = VK_NULL_HANDLE;
-				}
-				if (Objects[i].textures.specular != VK_NULL_HANDLE) {
-					vkDestroyImage(device, Objects[i].textures.specular, nullptr);
-					vkFreeMemory(device, Objects[i].textures.specularMemory, nullptr);
-					Objects[i].textures.specular = VK_NULL_HANDLE;
-					Objects[i].textures.specularMemory = VK_NULL_HANDLE;
-				}
-				if (Objects[i].textures.normal != VK_NULL_HANDLE) {
-					vkDestroyImage(device, Objects[i].textures.normal, nullptr);
-					vkFreeMemory(device, Objects[i].textures.normalMemory, nullptr);
-					Objects[i].textures.normal = VK_NULL_HANDLE;
-					Objects[i].textures.normalMemory = VK_NULL_HANDLE;
-				}
-			}
-
+		// Per-object cleanup (shared-buffer safe)
+		std::set<VkBuffer> destroyedBuffers;
+		std::set<VkDeviceMemory> destroyedMemories;
+		for (auto& obj : Objects) {
 			for (size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; j++) {
-				for (size_t u = 0; u < Objects[i].uniformBuffers.size(); u++)
-				{
-					if (Objects[i].uniformBuffers[u][j] != VK_NULL_HANDLE) {
-						vkDestroyBuffer(device, Objects[i].uniformBuffers[u][j], nullptr);
-						Objects[i].uniformBuffers[u][j] = VK_NULL_HANDLE;
+				for (size_t u = 0; u < obj.uniformBuffers.size(); u++) {
+					if (obj.uniformBuffers[u][j] != VK_NULL_HANDLE && destroyedBuffers.find(obj.uniformBuffers[u][j]) == destroyedBuffers.end()) {
+						vkDestroyBuffer(device, obj.uniformBuffers[u][j], nullptr);
+						destroyedBuffers.insert(obj.uniformBuffers[u][j]);
+						obj.uniformBuffers[u][j] = VK_NULL_HANDLE;
 					}
 				}
-				for (size_t u = 0; u < Objects[i].uniformBuffersMemory.size(); u++)
-				{
-					if (Objects[i].uniformBuffersMemory[u][j] != VK_NULL_HANDLE) {
-						vkFreeMemory(device, Objects[i].uniformBuffersMemory[u][j], nullptr);
-						Objects[i].uniformBuffersMemory[u][j] = VK_NULL_HANDLE;
+				for (size_t u = 0; u < obj.uniformBuffersMemory.size(); u++) {
+					if (obj.uniformBuffersMemory[u][j] != VK_NULL_HANDLE && destroyedMemories.find(obj.uniformBuffersMemory[u][j]) == destroyedMemories.end()) {
+						vkFreeMemory(device, obj.uniformBuffersMemory[u][j], nullptr);
+						destroyedMemories.insert(obj.uniformBuffersMemory[u][j]);
+						obj.uniformBuffersMemory[u][j] = VK_NULL_HANDLE;
 					}
 				}
 			}
-
-			// //Destroy the vertex and index buffers
-			//if (Objects[i].vertexBuffer != VK_NULL_HANDLE) {
-			//	vkDestroyBuffer(device, Objects[i].vertexBuffer, nullptr);
-			//	vkFreeMemory(device, Objects[i].vertexBufferMemory, nullptr);
-			//	Objects[i].vertexBuffer = VK_NULL_HANDLE;
-			//	Objects[i].vertexBufferMemory = VK_NULL_HANDLE;
-			//}
-			//if (Objects[i].indexBuffer != VK_NULL_HANDLE) {
-			//	vkDestroyBuffer(device, Objects[i].indexBuffer, nullptr);
-			//	vkFreeMemory(device, Objects[i].indexBufferMemory, nullptr);
-			//	Objects[i].indexBuffer = VK_NULL_HANDLE;
-			//	Objects[i].indexBufferMemory = VK_NULL_HANDLE;
-			//}
-
-			// Destroy the descriptor sets
-			//for (size_t j = 0; j < Objects[i].descriptorSets.size(); j++) {
-			//	vkFreeDescriptorSets(device, Objects[i].pipeline->descriptorPool, 1, &Objects[i].descriptorSets[j]);
-			//}
-			//Objects[i].descriptorSets.clear();
-			// Destroy the pipeline and descriptor set layout
-
-
-
-
-			//Objects[i].uniformBuffers.clear();
-			//Objects[i].uniformBuffersMemory.clear();
-		}
-
-		for (size_t i = 0; i < objectCreationBuffers.size(); i++)
-		{
-		
-			if (objectCreationBuffers[i].buffer != VK_NULL_HANDLE) {
-				vkDestroyBuffer(device, objectCreationBuffers[i].buffer, nullptr);
-				objectCreationBuffers[i].buffer = VK_NULL_HANDLE;
+			// Vertex and index buffers (shared-buffer safe)
+			if (obj.vertexBuffer != VK_NULL_HANDLE && destroyedBuffers.find(obj.vertexBuffer) == destroyedBuffers.end()) {
+				vkDestroyBuffer(device, obj.vertexBuffer, nullptr);
+				destroyedBuffers.insert(obj.vertexBuffer);
+				obj.vertexBuffer = VK_NULL_HANDLE;
 			}
-			if (objectCreationBuffers[i].memory != VK_NULL_HANDLE) {
-				vkFreeMemory(device, objectCreationBuffers[i].memory, nullptr);
-				objectCreationBuffers[i].memory = VK_NULL_HANDLE;
+			if (obj.vertexBufferMemory != VK_NULL_HANDLE && destroyedMemories.find(obj.vertexBufferMemory) == destroyedMemories.end()) {
+				vkFreeMemory(device, obj.vertexBufferMemory, nullptr);
+				destroyedMemories.insert(obj.vertexBufferMemory);
+				obj.vertexBufferMemory = VK_NULL_HANDLE;
 			}
-			objectCreationBuffers[i].buffer = VK_NULL_HANDLE;
-			objectCreationBuffers[i].memory = VK_NULL_HANDLE;
-		
+			if (obj.indexBuffer != VK_NULL_HANDLE && destroyedBuffers.find(obj.indexBuffer) == destroyedBuffers.end()) {
+				vkDestroyBuffer(device, obj.indexBuffer, nullptr);
+				destroyedBuffers.insert(obj.indexBuffer);
+				obj.indexBuffer = VK_NULL_HANDLE;
+			}
+			if (obj.indexBufferMemory != VK_NULL_HANDLE && destroyedMemories.find(obj.indexBufferMemory) == destroyedMemories.end()) {
+				vkFreeMemory(device, obj.indexBufferMemory, nullptr);
+				destroyedMemories.insert(obj.indexBufferMemory);
+				obj.indexBufferMemory = VK_NULL_HANDLE;
+			}
+			// Descriptor sets are freed with the pool
+			obj.uniformBuffers.clear();
+			obj.uniformBuffersMemory.clear();
+			obj.uniformBuffersMapped.clear();
+			obj.descriptorSets.clear();
 		}
+		Objects.clear();
 
+		// Pipelines
 		for (auto& pipeline : Pipelines) {
-			vkDestroyPipeline(device, pipeline->pipeline, nullptr);
-			vkDestroyPipelineLayout(device, pipeline->pipelineLayout, nullptr);
-			vkDestroyDescriptorSetLayout(device, pipeline->descriptorSetLayout, nullptr);
-			vkDestroyDescriptorPool(device, pipeline->descriptorPool, nullptr);
-			//delete pipeline;	
+			if (pipeline->pipeline != VK_NULL_HANDLE)
+				vkDestroyPipeline(device, pipeline->pipeline, nullptr);
+			if (pipeline->pipelineLayout != VK_NULL_HANDLE)
+				vkDestroyPipelineLayout(device, pipeline->pipelineLayout, nullptr);
+			if (pipeline->descriptorSetLayout != VK_NULL_HANDLE)
+				vkDestroyDescriptorSetLayout(device, pipeline->descriptorSetLayout, nullptr);
+			if (pipeline->descriptorPool != VK_NULL_HANDLE)
+				vkDestroyDescriptorPool(device, pipeline->descriptorPool, nullptr);
 		}
+		Pipelines.clear();
 
+		// Render passes
+		vkDestroyRenderPass(device, shadowRenderPass, nullptr); shadowRenderPass = VK_NULL_HANDLE;
+		vkDestroyRenderPass(device, renderPassHDR, nullptr); renderPassHDR = VK_NULL_HANDLE;
+		vkDestroyRenderPass(device, BRDFRenderPass, nullptr); BRDFRenderPass = VK_NULL_HANDLE;
+
+		// Reset smart pointers for Vulkan objects (calls destructors)
+		// Order matters: destroy VulkanBuffer first to clean up command pool and buffers
+		m_VulkanBuffer.reset();
+		m_VulkanSwapChain.reset();
+		m_VulkanGraphicsPipeline.reset();
+		m_VulkanCore.reset();
 		
+		// Clear all device references after all Vulkan objects are destroyed
+		device = VK_NULL_HANDLE;
+		physicalDevice = VK_NULL_HANDLE;
+		graphicsQueue = VK_NULL_HANDLE;
+		presentQueue = VK_NULL_HANDLE;
+		surface = VK_NULL_HANDLE;
 
-		// After destroying all buffers, clear the list
-		//Objects.clear();
-
-		vkDestroyRenderPass(device, shadowRenderPass, nullptr);
-		//vkDestroyRenderPass(device, renderPass, nullptr);
-		vkDestroyRenderPass(device, renderPassHDR, nullptr);
-		vkDestroyRenderPass(device, BRDFRenderPass, nullptr);
-
-
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence(device, inFlightFences[i], nullptr);
-		}
-
-		//vkDestroyCommandPool(device, commandPool, nullptr);
-		vkDestroyDevice(device, nullptr);
-
-
-		//if (enableValidationLayers) {
-		//	DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-		//}
-		//vkDestroySurfaceKHR(instance, surface, nullptr);
-		//vkDestroyInstance(instance, nullptr);
-
-		//b_cubeconvulation = false;
 		TKC_CORE_INFO("Cleanup Completed");
 	}
 	void VulkanRendererAPI::DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
@@ -376,11 +311,11 @@ namespace Tokucu {
 	}
 	void VulkanRendererAPI::Render()
 	{
-		vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+		vkWaitForFences(device, 1, &m_VulkanCore->getInFlightFences()[currentFrame], VK_TRUE, UINT64_MAX);
 
 		uint32_t imageIndex;
 
-		VkResult result = vkAcquireNextImageKHR(device, m_VulkanSwapChain->getSwapChain(), UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		VkResult result = vkAcquireNextImageKHR(device, m_VulkanSwapChain->getSwapChain(), UINT64_MAX, m_VulkanCore->getImageAvailableSemaphores()[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 			m_VulkanSwapChain->recreateSwapChain();
@@ -391,16 +326,16 @@ namespace Tokucu {
 		}
 		updateUniformBuffer(currentFrame);
 
-		vkResetFences(device, 1, &inFlightFences[currentFrame]);
+		vkResetFences(device, 1, &m_VulkanCore->getInFlightFences()[currentFrame]);
 
-		commandBuffers = m_VulkanBuffer->getCommandBuffers();
+		std::vector<VkCommandBuffer> commandBuffers = m_VulkanBuffer->getCommandBuffers();
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
 		recordCommandBuffer(commandBuffers[currentFrame], imageIndex, currentFrame);
 
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-		VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
+		VkSemaphore waitSemaphores[] = { m_VulkanCore->getImageAvailableSemaphores()[currentFrame] };
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 		submitInfo.waitSemaphoreCount = 1;
 		submitInfo.pWaitSemaphores = waitSemaphores;
@@ -409,11 +344,11 @@ namespace Tokucu {
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
-		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
+		VkSemaphore signalSemaphores[] = { m_VulkanCore->getRenderFinishedSemaphores()[currentFrame] };
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
-		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
+		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, m_VulkanCore->getInFlightFences()[currentFrame]) != VK_SUCCESS) {
 			throw std::runtime_error("failed to submit draw command buffer!");
 		}
 
@@ -583,10 +518,6 @@ namespace Tokucu {
 	}
 
 	void VulkanRendererAPI::createShadowFramebuffer() {
-		//////////////////////////////////////////
-		// TODO: Create general framebuffer function for better organization
-		// /////////////////////////////////////
-
 		// Framebuffer for Shadow Mapping
 		m_VulkanCreateImage->createImage(shadowMapSize, shadowMapSize, 1, VK_SAMPLE_COUNT_1_BIT,
 			VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
@@ -594,10 +525,8 @@ namespace Tokucu {
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			shadowImage, shadowImageMemory, 12, 16);
 		shadowImageView = m_VulkanCreateImage->createImageView(shadowImage, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 12);
-
 		
-		VulkanFramebuffer shadowFramebuffer(device, shadowRenderPass, { shadowImageView }, shadowMapSize, shadowMapSize, 12);
-		shadowFrameBuffer = shadowFramebuffer.createFramebuffers();
+		shadowFrameBuffer = m_VulkanFramebuffer->createFramebuffers(shadowRenderPass, { shadowImageView }, shadowMapSize, shadowMapSize, 12);
 
 		// Framebuffer for HDR Cubemap
 		m_VulkanCreateImage->createImage(1024, 1024, 1, VK_SAMPLE_COUNT_1_BIT,
@@ -607,10 +536,7 @@ namespace Tokucu {
 			HDRCubeImage, HDRCubeImageMemory, 6, 16);
 		HDRCubeView = m_VulkanCreateImage->createImageView(HDRCubeImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 6);
 
-
-		VulkanFramebuffer HDRCubeFramebuffer(device, renderPassHDR, { HDRCubeView }, 1024, 1024, 6);
-		HDRCubeFrameBuffer = HDRCubeFramebuffer.createFramebuffers();
-
+		HDRCubeFrameBuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { HDRCubeView }, 1024, 1024, 6);
 
 		// Framebuffer for Cube Convolution
 		m_VulkanCreateImage->createImage(32, 32, 1, VK_SAMPLE_COUNT_1_BIT,
@@ -620,8 +546,7 @@ namespace Tokucu {
 			CubeConvolutionImage, CubeConvolutionImageMemory, 6, 16);
 		CubeConvolutionImageView = m_VulkanCreateImage->createImageView(CubeConvolutionImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 6);
 		
-		VulkanFramebuffer CubeConvolutionFramebuffer(device, renderPassHDR, { CubeConvolutionImageView }, 32, 32, 6);
-		CubeConvolutionFrameBuffer = CubeConvolutionFramebuffer.createFramebuffers();
+		CubeConvolutionFrameBuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { CubeConvolutionImageView }, 32, 32, 6);
 
 		// Framebuffer for Prefiltered Cubemap
 		m_VulkanCreateImage->createImage(512, 512, 1, VK_SAMPLE_COUNT_1_BIT,
@@ -631,8 +556,7 @@ namespace Tokucu {
 			BRDFImage, BRDFImageMemory, 1, 0);
 		BRDFImageView = m_VulkanCreateImage->createImageView(BRDFImage, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0,1);
 		
-		VulkanFramebuffer BRDFFramebuffer(device, BRDFRenderPass, { BRDFImageView }, 512, 512, 1);
-		BRDFFrameBuffer = BRDFFramebuffer.createFramebuffers();
+		BRDFFrameBuffer = m_VulkanFramebuffer->createFramebuffers(BRDFRenderPass, { BRDFImageView }, 512, 512, 1);
 	}
 	/*ModelData VulkanRendererAPI::loadModel(std::string modelLocation) {
 		// Load model using tinyobjloader
@@ -739,11 +663,6 @@ namespace Tokucu {
 		BufferData planeVertexData = m_VulkanBuffer->createVertexBuffer(secondVertices);
 		BufferData planeIndexData = m_VulkanBuffer->createIndexBuffer(secondIndices);
 
-		// To delete buffer data
-		objectCreationBuffers.push_back(planeVertexData);
-		objectCreationBuffers.push_back(vertexData);
-		objectCreationBuffers.push_back(indexData);
-
 		//realCube = { "realCube", cubeVertices, cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt,
 		//	{{"ambient","textures/Lambda.jpg"},{"diffuse","textures/Lambda.jpg"},{"specular","textures/LambdaSpecular.jpg"},{"normal","textures/defaultNormal.jpg"}} };
 		//Objects.push_back(realCube);
@@ -811,9 +730,6 @@ namespace Tokucu {
 			BufferData vertexData = m_VulkanBuffer->createVertexBuffer(mesh.vertices);
 			BufferData indexData = m_VulkanBuffer->createIndexBuffer(mesh.indices);
 
-			objectCreationBuffers.push_back(vertexData);
-			objectCreationBuffers.push_back(indexData);
-
 			std::string materialName = mesh.materialName;
 			std::cout << "Processing material: " << materialName << std::endl;
 			materialTextureLocations.clear();
@@ -836,12 +752,16 @@ namespace Tokucu {
 			};
 			Objects.push_back(obj);
 		}
-
 	}
 
 	void VulkanRendererAPI::createTextureImage() {
 		for (auto& object : Objects) {
 			if (object.textureLocations.empty()) continue;
+			if (object.name == "cubeConv") {
+
+				DescriptorTextureInfo cubeConvInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, HDRCubeView };
+				object.texturesInfo.push_back(cubeConvInfo);
+			}
 			if (object.name == "prefilterCube")
 			{
 				//not using generate mipmap function , mipmapping manually with several FB and imageviews
@@ -853,6 +773,9 @@ namespace Tokucu {
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					prefilterMapImage, prefilterMapImageMemory, 6, 16);
 				prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
+				DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ,textureSampler,HDRCubeView };
+				object.texturesInfo.push_back(prefilterInfo);
+
 			}
 			// Create texture image for HDR skybox having one layer (equirectangular)
 			if (object.name == "skyBoxHDR")
@@ -878,11 +801,11 @@ namespace Tokucu {
 					VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
 					VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, skyboxHDRImage,
 					skyboxHDRImageMemory, 1, 0);
-				transitionImageLayout(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT,
+				m_VulkanBuffer->transitionImageLayout(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
-				copyBufferToImage(stagingBuffer, skyboxHDRImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
-				transitionImageLayout(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT,
+				m_VulkanBuffer->copyBufferToImage(stagingBuffer, skyboxHDRImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
+				m_VulkanBuffer->transitionImageLayout(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT,
 					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 					VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
@@ -890,6 +813,8 @@ namespace Tokucu {
 				vkFreeMemory(device, stagingBufferMemory, nullptr);
 				
 				skyboxHDRImageView = m_VulkanCreateImage->createImageView(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+				DescriptorTextureInfo skyboxHDRInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, skyboxHDRImageView };
+				object.texturesInfo.push_back(skyboxHDRInfo);
 				continue;
 			}
 			// Create texture image for skybox having 6 layers (cubemap)
@@ -904,7 +829,7 @@ namespace Tokucu {
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					skyboxImage, skyboxImageMemory, 6, 16);
 				// Transition all layers to transfer destination
-				transitionImageLayout(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB,
+				m_VulkanBuffer->transitionImageLayout(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, 0);
 				// Modified loading loop for skybox 
@@ -935,7 +860,7 @@ namespace Tokucu {
 					vkUnmapMemory(device, stagingBufferMemory);
 					stbi_image_free(pixels);
 					// Copy from buffer to the specific face of the cubemap
-					copyBufferToImage(stagingBuffer, skyboxImage,
+					m_VulkanBuffer->copyBufferToImage(stagingBuffer, skyboxImage,
 						static_cast<uint32_t>(texWidth),
 						static_cast<uint32_t>(texHeight), i);
 					// Clean up staging resources
@@ -943,12 +868,14 @@ namespace Tokucu {
 					vkFreeMemory(device, stagingBufferMemory, nullptr);
 				}
 				// After all faces are copied, transition to shader read layout
-				transitionImageLayout(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB,
+				m_VulkanBuffer->transitionImageLayout(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB,
 					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, 0);
 				// Create the image view and sampler
 				skyboxImageView = m_VulkanCreateImage->createImageView(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 6);
+				DescriptorTextureInfo skyboxInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, HDRCubeView };
+				object.texturesInfo.push_back(skyboxInfo);
 				// Skip the rest of the texture processing
 				continue;
 			}
@@ -1003,44 +930,99 @@ namespace Tokucu {
 			
 				m_VulkanCreateImage->createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory, 1, 0);
-				transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
-				copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
+				m_VulkanBuffer->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
+				m_VulkanBuffer->copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
 				//generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-				transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
+				m_VulkanBuffer->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
 				vkDestroyBuffer(device, stagingBuffer, nullptr);
 				vkFreeMemory(device, stagingBufferMemory, nullptr);
 
 				VkImageView textureImageView = m_VulkanCreateImage->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, 0, 1);
 				if (type == "ambient")
 				{
-					object.textures.ambient = textureImage;
-					object.textures.ambientMemory = textureImageMemory;
-					object.textures.imageViews[0] = textureImageView;
+					//object.textures.imageViews[0] = textureImageView;
+					DescriptorTextureInfo ambientInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
+					object.texturesInfo.push_back(ambientInfo);
 				}
 				else if (type == "diffuse")
 				{
-					object.textures.diffuse = textureImage;
-					object.textures.diffuseMemory = textureImageMemory;
-					object.textures.imageViews[1] = textureImageView;
+				//	object.textures.imageViews[1] = textureImageView;
+					DescriptorTextureInfo diffuseInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
+					object.texturesInfo.push_back(diffuseInfo);
 				}
 				else if (type == "specular")
 				{
-					object.textures.specular = textureImage;
-					object.textures.specularMemory = textureImageMemory;
-					object.textures.imageViews[2] = textureImageView;
+					//object.textures.imageViews[2] = textureImageView;
+					DescriptorTextureInfo specularInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
+					object.texturesInfo.push_back(specularInfo);
 				}
 				else if (type == "normal")
 				{
-					object.textures.specular = textureImage;
-					object.textures.specularMemory = textureImageMemory;
-					object.textures.imageViews[3] = textureImageView;
+					//object.textures.imageViews[3] = textureImageView;
+					DescriptorTextureInfo normalInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
+					object.texturesInfo.push_back(normalInfo);
+
+					DescriptorTextureInfo shadowInfo = { VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView };
+					object.texturesInfo.push_back(shadowInfo);
+
+					DescriptorTextureInfo cubeConvolutionInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, CubeConvolutionImageView };
+					object.texturesInfo.push_back(cubeConvolutionInfo);
+
+					DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView };
+					object.texturesInfo.push_back(prefilterInfo);
+
+					DescriptorTextureInfo BRDFInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, BRDFImageView };
+					object.texturesInfo.push_back(BRDFInfo);
+
+
 				}
 				textureImages.push_back(textureImage);
 				textureImagesView.push_back(textureImageView);
 				textureImagesMemory.push_back(textureImageMemory);
 
 			}
+			
 		}
+	}
+
+	void VulkanRendererAPI::createTextureSampler() {
+
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+		
+		 // standard color sampler
+		textureSampler = m_VulkanCreateImage->createSampler(
+			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+			VK_SAMPLER_ADDRESS_MODE_REPEAT,
+			true,                                    // enable anisotropy
+			properties.limits.maxSamplerAnisotropy, // use max available
+			VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+			false, VK_COMPARE_OP_ALWAYS,
+			mipLevels
+		);
+
+		// prefilter (environment) sampler
+		prefilterTextureSampler = m_VulkanCreateImage->createSampler(
+			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+			VK_SAMPLER_ADDRESS_MODE_REPEAT,
+			true,
+			properties.limits.maxSamplerAnisotropy,
+			VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+			false, VK_COMPARE_OP_ALWAYS,
+			prefilterMipLevels
+		);
+
+		// shadow map PCF sampler
+		shadowSampler = m_VulkanCreateImage->createSampler(
+			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+			VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+			false,  // no anisotropy needed
+			1.0f,
+			VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+			true, VK_COMPARE_OP_LESS_OR_EQUAL,
+			1       // just base level
+		);
+
 	}
 
 	void VulkanRendererAPI::createUniformBuffers() {
@@ -1080,184 +1062,18 @@ namespace Tokucu {
 
 	void VulkanRendererAPI::createDescriptorPool() {
 		for (auto& pipeline : Pipelines) {
-			std::vector<VkDescriptorPoolSize> poolSizes;
-			int iteration = 0;
-			for (auto& [type, flag] : pipeline->descriptorLayout) {
-				VkDescriptorPoolSize poolSize{};
-				poolSize.type = type;
-				poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * Objects.size());
-				poolSizes.push_back(poolSize);
-				iteration++;
-			}
-			VkDescriptorPoolCreateInfo poolInfo{};
-			poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-			poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-			poolInfo.pPoolSizes = poolSizes.data();
-			poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * Objects.size());
-
-			if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &pipeline->descriptorPool) != VK_SUCCESS) {
-				throw std::runtime_error("failed to create descriptor pool!");
-			}
+			m_VulkanGraphicsPipeline->createDescriptorPool(pipeline, Objects.size());
 		}
 	}
-
+	
 	void VulkanRendererAPI::createDescriptorSets() {
-		for (auto& object : Objects)
-		{
-			std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, object.pipeline->descriptorSetLayout);
-			VkDescriptorSetAllocateInfo allocInfo{};
-			allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-			allocInfo.descriptorPool = object.pipeline->descriptorPool;
-			allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-			allocInfo.pSetLayouts = layouts.data();
-
-			object.descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-
-			if (vkAllocateDescriptorSets(device, &allocInfo, object.descriptorSets.data()) != VK_SUCCESS) {
-				throw std::runtime_error("failed to allocate descriptor sets!");
-			}
-			if (shadowImageView == VK_NULL_HANDLE) {
-				throw std::runtime_error("Error: shadowImageView is VK_NULL_HANDLE!");
-			}
-			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-				std::vector<VkWriteDescriptorSet> descriptorWrites;
-				descriptorWrites.clear();
-
-				for (size_t j = 0; j < object.pipeline->bufferSize.size(); j++)
-				{
-					object.pipeline->descriptionBufferInfo[j].first->buffer = object.uniformBuffers[j][i];
-					object.pipeline->descriptionBufferInfo[j].first->offset = 0;
-					object.pipeline->descriptionBufferInfo[j].first->range = object.pipeline->bufferSize[j];
-				}
-				for (size_t j = 0; j < object.pipeline->descriptionSampleInfo.size(); j++)
-				{	//for shadow mapping
-					if (object.name == "skyBox")
-					{
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = HDRCubeView;
-						//object.pipeline->descriptionSampleInfo[j]->imageView = skyboxImageView;
-						//object.pipeline->descriptionSampleInfo[j]->imageView = prefilterMapView;
-						info.sampler = textureSampler;
-						
-						continue;
-					}
-					if (object.name == "skyBoxHDR")
-					{
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = skyboxHDRImageView;
-						info.sampler = textureSampler;
-						continue;
-					}
-					if (object.name == "cubeConv")
-					{
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = HDRCubeView;
-						info.sampler = textureSampler;
-						continue;
-					}
-					if (object.name == "prefilterCube")
-					{
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = HDRCubeView;
-						info.sampler = textureSampler;
-						continue;
-					}
-					if (j == 4) {
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						if (!&info) {
-							throw std::runtime_error("Error: descriptionSampleInfo is nullptr!");
-						}
-						info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-						info.imageView = shadowImageView;
-						info.sampler = shadowSampler;
-						if (info.imageView == VK_NULL_HANDLE) {
-							throw std::runtime_error("Error: descriptionSampleInfo.imageView is VK_NULL_HANDLE!");
-						}
-					}
-					else if (j == 5) {
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						if (!&info) {
-							throw std::runtime_error("Error: descriptionSampleInfo is nullptr!");
-						}
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = CubeConvolutionImageView;
-						info.sampler = textureSampler;
-						if (info.imageView == VK_NULL_HANDLE) {
-							throw std::runtime_error("Error: descriptionSampleInfo.imageView is VK_NULL_HANDLE!");
-						}
-					}
-					else if (j == 6) {
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						if (!&info) {
-							throw std::runtime_error("Error: descriptionSampleInfo is nullptr!");
-						}
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = prefilterMapView;
-						info.sampler = prefilterTextureSampler;
-						if (info.imageView == VK_NULL_HANDLE) {
-							throw std::runtime_error("Error: descriptionSampleInfo.imageView is VK_NULL_HANDLE!");
-						}
-					}
-					else if (j == 7) {
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						if (!&info) {
-							throw std::runtime_error("Error: descriptionSampleInfo is nullptr!");
-						}
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = BRDFImageView;
-						info.sampler = textureSampler;
-						if (info.imageView == VK_NULL_HANDLE) {
-							throw std::runtime_error("Error: descriptionSampleInfo.imageView is VK_NULL_HANDLE!");
-						}
-					}
-					else {
-						auto& info = object.pipeline->descriptionSampleInfo[j];
-						info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-						info.imageView = object.textures.imageViews[j];
-						info.sampler = textureSampler;
-					}
-				}
-				int binding = 0;
-				for (size_t j = 0; j < object.pipeline->descriptionBufferInfo.size(); j++)
-				{
-
-					VkWriteDescriptorSet descriptorWriteBuffer{};
-					descriptorWriteBuffer.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-					descriptorWriteBuffer.dstSet = object.descriptorSets[i];
-					descriptorWriteBuffer.dstBinding = binding;
-					descriptorWriteBuffer.dstArrayElement = 0;
-					descriptorWriteBuffer.descriptorType = object.pipeline->descriptorLayout[j].first;
-					descriptorWriteBuffer.descriptorCount = 1;
-					descriptorWriteBuffer.pBufferInfo = object.pipeline->descriptionBufferInfo[j].first;
-					descriptorWrites.push_back(descriptorWriteBuffer);
-					binding++;
-				}
-				//for (size_t j = 0; j < object.pipeline->descriptionSampleInfo.size(); j++)
-				for(size_t j = 0; j < object.pipeline->descriptionSampleInfoCount; j++)
-				{
-					auto& info = object.pipeline->descriptionSampleInfo[j];
-					VkWriteDescriptorSet descriptorWriteSample{};
-					descriptorWriteSample.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-					descriptorWriteSample.dstSet = object.descriptorSets[i];
-					descriptorWriteSample.dstBinding = binding;
-					descriptorWriteSample.dstArrayElement = 0;
-					descriptorWriteSample.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-					descriptorWriteSample.descriptorCount = 1;
-					descriptorWriteSample.pImageInfo = &info;
-					descriptorWrites.push_back(descriptorWriteSample);
-					binding++;
-				}
-				std::cout << "writes size: " << descriptorWrites.size() << std::endl;
-				vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-			}
+		for (auto& object : Objects) {
+			m_VulkanGraphicsPipeline->createDescriptorSets(&object);
 		}
 	}
 
 	void VulkanRendererAPI::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage) {
+		
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		beginInfo.flags = 0; // Optional
@@ -1460,7 +1276,7 @@ namespace Tokucu {
 			{
 				uint32_t mipWidth = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 				uint32_t mipHeight = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
-				transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
+				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
 				VkRenderPassBeginInfo prefilterRenderPassInfo{};
 				prefilterRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 				prefilterRenderPassInfo.renderPass = renderPassHDR;
@@ -1468,12 +1284,12 @@ namespace Tokucu {
 
 				prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
 				//When creating a framebuffer, each attachment must reference only a single mip level.
-				
+
 				VkImageView prefilterMapTempView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip, 6);
-				
+
 				// Create Framebuffer for prefilter map
 				VkFramebuffer prefilterMapFramebuffer = VK_NULL_HANDLE;
-				
+
 				VkFramebufferCreateInfo prefilterFramebufferInfo{};
 				prefilterFramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 				prefilterFramebufferInfo.renderPass = renderPassHDR;
@@ -1530,7 +1346,7 @@ namespace Tokucu {
 					}
 				}
 				vkCmdEndRenderPass(commandBuffer);
-				transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
+				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
 			}
 			prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
 			b_cubeconvulation = true;
@@ -1549,7 +1365,7 @@ namespace Tokucu {
 
 		VkExtent2D swapChainExtent = m_VulkanSwapChain->getSwapChainExtent();
 		renderPassInfo.renderArea.extent = swapChainExtent;
-		
+
 
 
 		renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
@@ -1584,27 +1400,6 @@ namespace Tokucu {
 		}
 	}
 
-	void VulkanRendererAPI::createSyncObjects() {
-		imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-		renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-		inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
-
-		VkSemaphoreCreateInfo semaphoreInfo{};
-		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-		VkFenceCreateInfo fenceInfo{};
-		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-				vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-				vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
-				throw std::runtime_error("failed to create synchronization objects for a frame!");
-			}
-		}
-	}
-
 	void VulkanRendererAPI::updateUniformBuffer(uint32_t currentImage) {
 		auto camera = Camera::GetInstance();
 		static auto startTime = std::chrono::high_resolution_clock::now();
@@ -1616,7 +1411,7 @@ namespace Tokucu {
 		glm::vec3 LightSourcePosition = glm::vec3(0.0f, 0.0f, 2.0f);
 		glm::vec3 specular = glm::vec3(1.0f);
 		glm::vec3 viewpos = camera->GetPosition();
-		glm::mat4 lightProjection = glm::perspective(glm::radians(90.f), 1.f, 0.1f, 100.f);
+		glm::mat4 lightProjection = glm::perspective(glm::radians(90.0f), 1.f, 0.1f, 100.f);
 		glm::vec3 LightSourcePosition2(5 * cos(time), 0.0f, 5 * sin(time));
 
 		objectTransformations["Shotgun"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -3.0f, 5.0f));
@@ -1717,12 +1512,12 @@ namespace Tokucu {
 			if (object.pipeline->name == "lightPipeline")
 			{
 				memcpy(object.uniformBuffersMapped[0][currentImage], &ubo, sizeof(ubo));
-				memcpy(object.uniformBuffersMapped[1][currentFrame], &colorUbo, sizeof(colorUbo));
+				memcpy(object.uniformBuffersMapped[1][currentImage], &colorUbo, sizeof(colorUbo));
 			}
 			if (object.pipeline->name == "defaultPipeline")
 			{
 				memcpy(object.uniformBuffersMapped[0][currentImage], &ubo, sizeof(ubo));
-				memcpy(object.uniformBuffersMapped[1][currentFrame], pointLights.data(), sizeof(LightAttributes) * pointLights.size());
+				memcpy(object.uniformBuffersMapped[1][currentImage], pointLights.data(), sizeof(LightAttributes) * pointLights.size());
 				memcpy(object.uniformBuffersMapped[2][currentImage], lightMatrixArray.data(), sizeof(shadowUBO) * lightMatrixArray.size());
 			}
 			if (object.pipeline->name == "skyboxPipeline")
@@ -1739,223 +1534,5 @@ namespace Tokucu {
 		}
 	}
 
-	void VulkanRendererAPI::createTextureSampler() {
-
-		VkPhysicalDeviceProperties properties{};
-		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
-		
-		 // standard color sampler
-		textureSampler = m_VulkanCreateImage->createSampler(
-			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-			VK_SAMPLER_ADDRESS_MODE_REPEAT,
-			true,                                    // enable anisotropy
-			properties.limits.maxSamplerAnisotropy, // use max available
-			VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-			false, VK_COMPARE_OP_ALWAYS,
-			mipLevels
-		);
-
-		// prefilter (environment) sampler
-		prefilterTextureSampler = m_VulkanCreateImage->createSampler(
-			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-			VK_SAMPLER_ADDRESS_MODE_REPEAT,
-			true,
-			properties.limits.maxSamplerAnisotropy,
-			VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-			false, VK_COMPARE_OP_ALWAYS,
-			prefilterMipLevels
-		);
-
-		// shadow map PCF sampler
-		shadowSampler = m_VulkanCreateImage->createSampler(
-			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-			VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-			false,  // no anisotropy needed
-			1.0f,
-			VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
-			true, VK_COMPARE_OP_LESS_OR_EQUAL,
-			1       // just base level
-		);
-
-	}
-
-	void VulkanRendererAPI::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
-		VkCommandBuffer commandBuffer = m_VulkanBuffer->beginSingleTimeCommands();
-
-		VkFormatProperties formatProperties;
-		vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
-		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-			throw std::runtime_error("texture image format does not support linear blitting!");
-		}
-		VkImageMemoryBarrier barrier{};
-		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		barrier.image = image;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = 1;
-		barrier.subresourceRange.levelCount = 1;
-
-		int32_t mipWidth = texWidth;
-		int32_t mipHeight = texHeight;
-
-		for (uint32_t i = 1; i < mipLevels; i++) {
-			barrier.subresourceRange.baseMipLevel = i - 1;
-			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-			vkCmdPipelineBarrier(commandBuffer,
-				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-				0, nullptr,
-				0, nullptr,
-				1, &barrier);
-
-			VkImageBlit blit{};
-			blit.srcOffsets[0] = { 0, 0, 0 };
-			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			blit.srcSubresource.mipLevel = i - 1;
-			blit.srcSubresource.baseArrayLayer = 0;
-			blit.srcSubresource.layerCount = 1;
-			blit.dstOffsets[0] = { 0, 0, 0 };
-			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
-			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			blit.dstSubresource.mipLevel = i;
-			blit.dstSubresource.baseArrayLayer = 0;
-			blit.dstSubresource.layerCount = 1;
-
-			vkCmdBlitImage(commandBuffer,
-				image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				1, &blit,
-				VK_FILTER_LINEAR);
-
-			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			vkCmdPipelineBarrier(commandBuffer,
-				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-				0, nullptr,
-				0, nullptr,
-				1, &barrier);
-			if (mipWidth > 1) mipWidth /= 2;
-			if (mipHeight > 1) mipHeight /= 2;
-		}
-
-		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-		vkCmdPipelineBarrier(commandBuffer,
-			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-			0, nullptr,
-			0, nullptr,
-			1, &barrier);
-
-
-		m_VulkanBuffer->endSingleTimeCommands(commandBuffer);
-	}
-
-	void VulkanRendererAPI::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, int layerCount, uint32_t mipLevels, uint32_t baseMipLevel) {
-		VkCommandBuffer commandBuffer = m_VulkanBuffer->beginSingleTimeCommands();
-
-		VkImageMemoryBarrier barrier{};
-		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		barrier.oldLayout = oldLayout;
-		barrier.newLayout = newLayout;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = image;
-		barrier.subresourceRange.aspectMask = aspectFlags;
-		barrier.subresourceRange.baseMipLevel = baseMipLevel;
-		barrier.subresourceRange.levelCount = mipLevels;
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = layerCount;
-
-		VkPipelineStageFlags sourceStage = 0;
-		VkPipelineStageFlags destinationStage = 0;
-
-		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		}
-		else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		}
-		else if (oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-			destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-		}
-		else if (oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL) {
-			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		}
-		else if (oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-			barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		}
-		else {
-			throw std::invalid_argument("unsupported layout transition!");
-		}
-
-		vkCmdPipelineBarrier(
-			commandBuffer,
-			sourceStage , destinationStage,
-			0,
-			0, nullptr,
-			0, nullptr,
-			1, &barrier
-		);
-
-		m_VulkanBuffer->endSingleTimeCommands(commandBuffer);
-
-	}
-
-	void VulkanRendererAPI::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t baseArrayLayer) {
-		VkCommandBuffer commandBuffer = m_VulkanBuffer->beginSingleTimeCommands();
-
-		VkBufferImageCopy region{};
-		region.bufferOffset = 0;
-		region.bufferRowLength = 0;
-		region.bufferImageHeight = 0;
-		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		region.imageSubresource.mipLevel = 0;
-		region.imageSubresource.baseArrayLayer = baseArrayLayer;
-		region.imageSubresource.layerCount = 1;
-		region.imageOffset = { 0, 0, 0 };
-		region.imageExtent = {
-			width,
-			height,
-			1
-		};
-
-		vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-		m_VulkanBuffer->endSingleTimeCommands(commandBuffer);
-
-	}
-	
-	
-	
 
 }

@@ -26,6 +26,39 @@ namespace Tokucu
 		std::vector<VkPresentModeKHR> presentModes = {};
 	};
 
+	struct UniformBufferObject {
+		glm::mat4 model = glm::mat4(1.0f);
+		glm::mat4 view = glm::mat4(1.0f);
+		glm::mat4 proj = glm::mat4(1.0f);
+	};
+
+	struct ColorUniform {
+		glm::vec3 color = { 1.0f,1.0f,1.0f };
+	};
+
+	struct shadowUBO {
+		glm::mat4 pl_lightSpaceMatrix[6] = {};
+
+	};
+
+	struct lightIndexUBO {
+		int lightIndex = 0;
+	};
+
+	struct LightAttributes
+	{
+		alignas(16) glm::vec3 pl_color = { 1.0f,1.0f,1.0f };
+		alignas(16) glm::vec3 pl_position = { 0.0f,0.0f,0.0f };
+		alignas(16) glm::vec3 pl_ambient = { 0.2f,0.2f,0.2f };
+		alignas(16) glm::vec3 pl_diffuse = { 1.0f,1.0f,1.0f };
+		alignas(16) glm::vec3 pl_specular = { 1.0f,1.0f,1.0f };
+		alignas(16) glm::vec3 pl_viewpot = { 0.0f,0.0f,0.0f };
+		float pl_constant = 1.0f;
+		float pl_linear = 0.09f;
+		float pl_quadratic = 0.032f;
+		float pl_pointlightNumber = 0.0f;
+	};
+
 	static std::vector<char> readFile(const std::string& filename) {
 		std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
@@ -61,6 +94,13 @@ namespace Tokucu
 		std::vector<VkDescriptorImageInfo> descriptionSampleInfo = {}; // Store image info
 	};
 
+	struct DescriptorTextureInfo {
+		VkImageLayout imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Default image layout
+		VkSampler sampler = VK_NULL_HANDLE; // Sampler for the textures
+		VkImageView imageView = VK_NULL_HANDLE; // Image view for the textures
+		//std::array<VkImageView, 4> imageViews;//ambient,diffuse,specular respectively
+	};
+
 	struct VulkanObject {
 		std::string name = "default";
 		std::vector<Vertex> vertexData = {};
@@ -69,8 +109,6 @@ namespace Tokucu
 		VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
 		VkBuffer indexBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
-		//VkVertexInputBindingDescription bindingDescriptions{};
-		//std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
 		Pipeline* pipeline = nullptr; // Pointer to the pipeline associated with this object
 		bool b_PBR = false; // Flag to indicate if the object uses PBR
 		std::optional<std::string> modelLocation = std::nullopt; // Optional model location
@@ -82,18 +120,8 @@ namespace Tokucu
 		std::vector<std::vector<void*>> uniformBuffersMapped = {};
 
 		std::vector<VkDescriptorSet> descriptorSets = {};
-		struct Textures {
-			VkImage ambient = VK_NULL_HANDLE;
-			VkDeviceMemory ambientMemory = VK_NULL_HANDLE;
-			VkImage diffuse = VK_NULL_HANDLE;
-			VkDeviceMemory diffuseMemory = VK_NULL_HANDLE;
-			VkImage specular = VK_NULL_HANDLE;
-			VkDeviceMemory specularMemory = VK_NULL_HANDLE;
-			VkImage normal = VK_NULL_HANDLE;
-			VkDeviceMemory normalMemory = VK_NULL_HANDLE;
-
-			std::array<VkImageView, 4> imageViews;//ambient,diffuse,specular respectively
-		} textures;
+		
+		std::vector<DescriptorTextureInfo> texturesInfo = {}; // Array of textures for the object
 	};
 
 	struct BufferData {
@@ -118,6 +146,18 @@ namespace Tokucu
 		}
 
 		~VulkanCore() {
+			// Destroy sync objects before destroying the device
+			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+				if (renderFinishedSemaphores.size() > i && renderFinishedSemaphores[i] != VK_NULL_HANDLE)
+					vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+				if (imageAvailableSemaphores.size() > i && imageAvailableSemaphores[i] != VK_NULL_HANDLE)
+					vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+				if (inFlightFences.size() > i && inFlightFences[i] != VK_NULL_HANDLE)
+					vkDestroyFence(device, inFlightFences[i], nullptr);
+			}
+			renderFinishedSemaphores.clear();
+			imageAvailableSemaphores.clear();
+			inFlightFences.clear();
 			if (device != VK_NULL_HANDLE) {
 				vkDestroyDevice(device, nullptr);
 			}
@@ -130,13 +170,14 @@ namespace Tokucu
 			if (instance != VK_NULL_HANDLE) {
 				vkDestroyInstance(instance, nullptr);
 			}
+			TKC_CORE_INFO("VulkanCore destroyed successfully");
 		}
 		
 		void createInstance();
 		void pickPhysicalDevice();
 		void createLogicalDevice();
 		void createSurface(GLFWwindow* glfwWindow);
-		//void createSyncObjects();
+		void createSyncObjects();
 		void setupDebugMessenger();
 		bool checkValidationLayerSupport();
 		std::vector<const char*> getRequiredExtensions();
@@ -160,6 +201,9 @@ namespace Tokucu
 		VkInstance getInstance() const { return instance; }
 		GLFWwindow* getGLFWWindow() const { return glfwWindow; }
 		int getMaxFramesInFlight() const { return MAX_FRAMES_IN_FLIGHT; }
+		std::vector<VkSemaphore>& getImageAvailableSemaphores() { return imageAvailableSemaphores; }
+		std::vector<VkSemaphore>& getRenderFinishedSemaphores() { return renderFinishedSemaphores; }
+		std::vector<VkFence>& getInFlightFences() { return inFlightFences; }
 
 		//Setters
 		void setGLFWWindow(GLFWwindow* window) { glfwWindow = window; }
@@ -184,6 +228,10 @@ namespace Tokucu
 		VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 		QueueFamilyIndices queueFamilyIndices;
 		SwapChainSupportDetails swapChainSupportDetails;
+
+		std::vector<VkSemaphore> imageAvailableSemaphores = {};
+		std::vector<VkSemaphore> renderFinishedSemaphores = {};
+		std::vector<VkFence> inFlightFences = {};
 
 		const int MAX_FRAMES_IN_FLIGHT = 2;
 	};

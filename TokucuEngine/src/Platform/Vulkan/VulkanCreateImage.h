@@ -10,6 +10,9 @@ namespace Tokucu
 		VulkanCreateImage(VkDevice device, VkPhysicalDevice physicalDevice)
 			: device(device), physicalDevice(physicalDevice) {
 		}
+		~VulkanCreateImage() {
+
+		}
 		VkImage createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
 			VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory, uint32_t layerCount, int flags);
 		VkImageView createImageView(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags, uint32_t mipLevels, uint32_t baseMipLevel, uint32_t layerCount);
@@ -25,6 +28,8 @@ namespace Tokucu
 			uint32_t               mipLevels);
 		
 		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+		// IBL-specific methods already implemented in VulkanRendererAPI
 
 	private:
 

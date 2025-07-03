@@ -5,12 +5,15 @@
 
 namespace Tokucu {
 
+	// Forward declarations
+	class VulkanFramebuffer;
+
 	class VulkanSwapChain
 	{
 
 	public:
-		VulkanSwapChain(VulkanCore* vulkanCore, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface)
-			: m_VulkanCore(vulkanCore), physicalDevice(physicalDevice), device(device), surface(surface) {
+		VulkanSwapChain(VulkanCore* vulkanCore,VulkanFramebuffer* vulkanFramebuffer, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface)
+			: m_VulkanCore(vulkanCore),m_VulkanFramebuffer(vulkanFramebuffer), physicalDevice(physicalDevice), device(device), surface(surface) {
 			msaaSamples = m_VulkanCore->getMsaaSamples();
 			m_VulkanCreateImage = std::make_unique<VulkanCreateImage>(device, physicalDevice);
 			createSwapChain();
@@ -19,23 +22,12 @@ namespace Tokucu {
 			createFramebuffers();
 		}
 		~VulkanSwapChain() {
-			cleanup();
-		}
-		void createSwapChain();
-		void cleanup() {
-			//vkDestroySwapchainKHR(device, swapChain, nullptr);
-			//for (auto& imageView : swapChainImageViews) {
-			//	if (imageView != VK_NULL_HANDLE) {
-			//		vkDestroyImageView(device, imageView, nullptr);
-			//	}
-			//}
-			//for (auto& framebuffer : swapChainFramebuffers) {
-			//	if (framebuffer != VK_NULL_HANDLE) {
-			//		vkDestroyFramebuffer(device, framebuffer, nullptr);
-			//	}
-			//}
-			//
-			//vkDestroySwapchainKHR(device, swapChain, nullptr);
+			for (auto framebuffer : swapChainFramebuffers) {
+				vkDestroyFramebuffer(device, framebuffer, nullptr);
+			}
+			for (auto imageView : swapChainImageViews) {
+				vkDestroyImageView(device, imageView, nullptr);
+			}
 
 			vkDestroyRenderPass(device, renderPass, nullptr);
 			if (depthImageView != VK_NULL_HANDLE) {
@@ -56,13 +48,19 @@ namespace Tokucu {
 			if (colorImageMemory != VK_NULL_HANDLE) {
 				vkFreeMemory(device, colorImageMemory, nullptr);
 			}
+			if (swapChain != VK_NULL_HANDLE) {
+				vkDestroySwapchainKHR(device, swapChain, nullptr);
+			}
+			// Clear all vectors
 			swapChainImages.clear();
 			swapChainImageViews.clear();
 			swapChainFramebuffers.clear();
 			swapChain = VK_NULL_HANDLE;
 
 			cleanupSwapChain();
+			TKC_CORE_INFO("VulkanSwapChain destroyed successfully");
 		}
+		void createSwapChain();
 
 		void recreateSwapChain();
 		void createImageViews();
@@ -93,6 +91,7 @@ namespace Tokucu {
 	private:
 
 		VulkanCore* m_VulkanCore;
+		VulkanFramebuffer* m_VulkanFramebuffer;
 		VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 		VkDevice device = VK_NULL_HANDLE;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
