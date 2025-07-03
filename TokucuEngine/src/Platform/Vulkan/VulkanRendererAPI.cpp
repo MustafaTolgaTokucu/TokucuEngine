@@ -714,9 +714,9 @@ namespace Tokucu {
 			,&m_PipelineBRDF,false,std::nullopt };
 		Objects.push_back(BRDFLud);
 
-		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 	}
 
