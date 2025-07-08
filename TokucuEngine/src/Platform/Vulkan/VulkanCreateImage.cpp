@@ -2,8 +2,6 @@
 #include "VulkanCreateImage.h"
 
 namespace Tokucu {
-
-
 	VkImage VulkanCreateImage::createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
 		VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory, uint32_t layerCount, int flags) {
 		VkImageCreateInfo imageInfo{};
@@ -42,7 +40,7 @@ namespace Tokucu {
 		return image;
 	}
 
-	VkImageView VulkanCreateImage::createImageView(VkImage image, VkFormat format,VkImageViewType viewType, VkImageAspectFlags aspectFlags, uint32_t mipLevels, uint32_t baseMipLevel, uint32_t layerCount) {
+	VkImageView VulkanCreateImage::createImageView(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags, uint32_t mipLevels, uint32_t baseMipLevel, uint32_t layerCount) {
 		VkImageViewCreateInfo viewInfo{};
 		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		viewInfo.image = image;
@@ -110,8 +108,4 @@ namespace Tokucu {
 		}
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
-
-
-
-
 }

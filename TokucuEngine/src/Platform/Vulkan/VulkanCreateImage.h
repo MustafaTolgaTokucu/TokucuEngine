@@ -26,23 +26,13 @@ namespace Tokucu
 			bool                   compareEnable,
 			VkCompareOp            compareOp,
 			uint32_t               mipLevels);
-		
-		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
-		// IBL-specific methods already implemented in VulkanRendererAPI
+		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
 	private:
 
 		VkDevice device;
 		VkPhysicalDevice physicalDevice;
-		
-
-
-
-
-
-
-
 	};
 }
 

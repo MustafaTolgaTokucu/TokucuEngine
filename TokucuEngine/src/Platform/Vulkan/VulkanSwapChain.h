@@ -12,8 +12,8 @@ namespace Tokucu {
 	{
 
 	public:
-		VulkanSwapChain(VulkanCore* vulkanCore,VulkanFramebuffer* vulkanFramebuffer, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface)
-			: m_VulkanCore(vulkanCore),m_VulkanFramebuffer(vulkanFramebuffer), physicalDevice(physicalDevice), device(device), surface(surface) {
+		VulkanSwapChain(VulkanCore* vulkanCore, VulkanFramebuffer* vulkanFramebuffer, VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface)
+			: m_VulkanCore(vulkanCore), m_VulkanFramebuffer(vulkanFramebuffer), physicalDevice(physicalDevice), device(device), surface(surface) {
 			msaaSamples = m_VulkanCore->getMsaaSamples();
 			m_VulkanCreateImage = std::make_unique<VulkanCreateImage>(device, physicalDevice);
 			createSwapChain();
@@ -68,8 +68,8 @@ namespace Tokucu {
 		void createRenderPass();
 		void cleanupSwapChain();
 
-	    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
-	    VkFormat findDepthFormat();
+		VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+		VkFormat findDepthFormat();
 
 		void createColorResources();
 		void createDepthResources();
@@ -120,6 +120,3 @@ namespace Tokucu {
 		std::unique_ptr<VulkanCreateImage> m_VulkanCreateImage = nullptr;
 	};
 }
-
-
-

@@ -8,6 +8,7 @@
 #include <vector>
 #include <iostream>
 
+
 #include "Tokucu/Renderer/ObjectAttributes.h"
 
 namespace Tokucu
@@ -129,6 +130,15 @@ namespace Tokucu
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 	};
 
+	struct RenderPassInfo {
+		VkRenderPassBeginInfo renderPassInfo = {};
+		VkViewport viewport = {};
+		VkRect2D scissor = {};
+		VkClearValue clearValue = {}; // Store the clear value directly
+		std::array<VkClearValue, 2> clearValues = {}; // Store multiple clear values for swap chain
+		bool useMultipleClearValues = false; // Flag to indicate which clear value array to use
+	};
+	
 	class VulkanCore{
 
 	public:
@@ -199,6 +209,7 @@ namespace Tokucu
 		VkSampleCountFlagBits getMsaaSamples() const { return msaaSamples; }
 		VkSurfaceKHR getSurface() const { return surface; }
 		VkInstance getInstance() const { return instance; }
+		uint32_t getGraphicsQueueFamily() const { return queueFamilyIndices.graphicsFamily.value(); }
 		GLFWwindow* getGLFWWindow() const { return glfwWindow; }
 		int getMaxFramesInFlight() const { return MAX_FRAMES_IN_FLIGHT; }
 		std::vector<VkSemaphore>& getImageAvailableSemaphores() { return imageAvailableSemaphores; }

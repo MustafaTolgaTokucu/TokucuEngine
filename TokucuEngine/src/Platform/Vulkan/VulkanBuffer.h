@@ -46,26 +46,6 @@ namespace Tokucu
 		void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
-		//// Command recording functions
-		//void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage,
-		//	const std::vector<VulkanObject>& objects, const std::vector<LightAttributes>& lights,
-		//	VkRenderPass mainRenderPass, VkRenderPass shadowRenderPass, VkRenderPass hdrRenderPass, VkRenderPass brdfRenderPass,
-		//	const std::vector<VkFramebuffer>& swapChainFramebuffers, VkExtent2D swapChainExtent,
-		//	VkFramebuffer shadowFramebuffer, VkFramebuffer hdrFramebuffer, VkFramebuffer irradianceFramebuffer, 
-		//	VkFramebuffer brdfFramebuffer, const std::vector<VkFramebuffer>& prefilterFramebuffers,
-		//	bool& b_cubeconvulation, uint32_t shadowMapSize, uint32_t prefilterMipLevels);
-		//
-		//void recordRenderPass(VkCommandBuffer commandBuffer, VkRenderPass renderPass, VkFramebuffer framebuffer,
-		//	uint32_t width, uint32_t height, const std::vector<VkClearValue>& clearValues,
-		//	const std::function<void(VkCommandBuffer, uint32_t)>& renderFunction, uint32_t currentImage);
-		//
-		//void renderObjects(VkCommandBuffer commandBuffer, uint32_t currentImage, 
-		//	const std::vector<VulkanObject>& objects,
-		//	const std::vector<std::string>& pipelineNames, 
-		//	const std::function<void(VkCommandBuffer, const VulkanObject&, uint32_t)>& customRender = nullptr);
-		//
-		//void setupViewportAndScissor(VkCommandBuffer commandBuffer, uint32_t width, uint32_t height);
-
 		//Getters
 		VkCommandPool getCommandPool() const { return commandPool; }
 		std::vector<VkCommandBuffer> getCommandBuffers() const { return commandBuffers; }

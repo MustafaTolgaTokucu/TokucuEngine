@@ -36,6 +36,9 @@ namespace Tokucu {
 		{
 			s_RendererAPI->Resize(window);
 		}
+		
+		// Get the current renderer instance
+		inline static RendererAPI* GetRendererAPI() { return s_RendererAPI; }
 	private:
 		static RendererAPI* s_RendererAPI;
 

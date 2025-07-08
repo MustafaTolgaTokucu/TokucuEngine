@@ -281,6 +281,26 @@ namespace Tokucu
 			vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 		}
 	}
+
+	void VulkanGraphicsPipeline::renderObject(VkCommandBuffer& commandBuffer, Pipeline* pipeline, RenderPassInfo& renderPassInfo, VulkanObject& object, uint32_t currentFrame) {
+		// Validate inputs
+		if (!pipeline || !pipeline->pipeline) {
+			throw std::runtime_error("Invalid pipeline in renderObject");
+		}
+		if (currentFrame >= MAX_FRAMES_IN_FLIGHT) {
+			throw std::runtime_error("Invalid currentFrame in renderObject");
+		}
+		
+		VkDeviceSize offsets[] = { 0 };
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
+		vkCmdSetViewport(commandBuffer, 0, 1, &renderPassInfo.viewport);
+		vkCmdSetScissor(commandBuffer, 0, 1, &renderPassInfo.scissor);
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
+		vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+	}
+
 	//we need to read the shader files
 	VkShaderModule VulkanGraphicsPipeline::createShaderModule(const std::vector<char>& code) {
 		VkShaderModuleCreateInfo createInfo{};

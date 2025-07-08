@@ -3,7 +3,7 @@
 
 namespace Tokucu {
 
-	VkRenderPass VulkanRenderPass::createRenderPass() {
+	VkRenderPass VulkanRenderPass::createRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat) {
 		VkRenderPass renderPass = VK_NULL_HANDLE;
 		VkAttachmentDescription colorAttachment{};
 		colorAttachment.format = imageFormat;

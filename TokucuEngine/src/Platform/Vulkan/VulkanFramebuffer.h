@@ -8,7 +8,6 @@ namespace Tokucu {
 	public:
 		VulkanFramebuffer(VkDevice device )
 			:  device(device) {
-			//createFramebuffers();
 		}
 		~VulkanFramebuffer() {
 			cleanup();
@@ -28,8 +27,6 @@ namespace Tokucu {
 			}
 			return framebuffer;
 		}
-
-		// IBL-specific framebuffer methods already implemented in VulkanRendererAPI
 
 		void cleanup() {
 		}

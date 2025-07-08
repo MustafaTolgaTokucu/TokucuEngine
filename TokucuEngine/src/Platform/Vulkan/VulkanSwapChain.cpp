@@ -119,8 +119,9 @@ namespace Tokucu {
 	}
 
 	void VulkanSwapChain::createRenderPass() {
-		VulkanRenderPass renderPass(device, physicalDevice, msaaSamples, swapChainImageFormat);
-		this->renderPass = renderPass.createRenderPass(); 
+		VulkanRenderPass renderPass(device, physicalDevice);
+		this->renderPass = renderPass.createRenderPass(msaaSamples, swapChainImageFormat);
+
 	}
 	//we need to choose the surface format(color depth) and presentation mode(conditions for"swapping" images to the screen)
 	VkSurfaceFormatKHR VulkanSwapChain::chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)

@@ -13,7 +13,7 @@ namespace Tokucu {
 	class VulkanGraphicsPipeline;
 	class VulkanBuffer;
 	class VulkanFramebuffer;
-	
+	class VulkanRenderPass;
 	
 
 	class VulkanRendererAPI : public RendererAPI
@@ -26,6 +26,9 @@ namespace Tokucu {
 		virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray);
 		virtual void Render();
 		virtual void Resize(const std::shared_ptr<Window>& window);
+		
+		// Public method to initialize ImGui (called by ImGuiLayer)
+		void InitializeImGuiForVulkan();
 	private:
 		////////////////////////////////////
 		////VULKAN INITIALIZERS (TEMPORARY)
@@ -41,8 +44,6 @@ namespace Tokucu {
 
 		void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage);
 		
-		//Model Loading with assimp. (FBX is set to default for now) 
-		//ModelData loadModel(std::string modelLocation);
 		void createUniformBuffers();
 		void updateUniformBuffer(uint32_t currentImage);
 		void createDescriptorPool();
@@ -55,6 +56,9 @@ namespace Tokucu {
 		void createObject();
 		void createModel(std::string modelName, std::string modelLocation, std::string textureLocation);
 		void createShadowFramebuffer();
+		
+		// ImGui Vulkan integration
+		void initImGui();
 		////////////////////////////////////////////
 		/////VULKAN CLASS MEMBERS
 		////////////////////////////////////////////
@@ -180,8 +184,11 @@ namespace Tokucu {
 		std::unique_ptr<VulkanGraphicsPipeline> m_VulkanGraphicsPipeline;
 		std::unique_ptr<VulkanBuffer> m_VulkanBuffer;
 		std::unique_ptr<VulkanFramebuffer> m_VulkanFramebuffer;
+		std::unique_ptr<VulkanRenderPass> m_VulkanRenderPass;
 		
-		// Manager classes moved to existing Vulkan classes
+		// ImGui Vulkan resources
+		VkDescriptorPool imGuiDescriptorPool = VK_NULL_HANDLE;
+		bool imGuiInitialized = false;
 	};
 
 }

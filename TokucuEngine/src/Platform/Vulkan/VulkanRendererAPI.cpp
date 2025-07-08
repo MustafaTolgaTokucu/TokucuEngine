@@ -14,6 +14,9 @@
 #include "VulkanGraphicsPipeline.h"
 #include "VulkanBuffer.h"
 
+// ImGui Vulkan integration
+#include "imgui/imgui_impl_vulkan.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image/stb_image.h"
 
@@ -110,7 +113,8 @@ namespace Tokucu {
 		m_VulkanGraphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(m_VulkanCore.get(), device, physicalDevice);
 		m_VulkanBuffer = std::make_unique<VulkanBuffer>(m_VulkanCore.get(), physicalDevice, device);
 		m_VulkanFramebuffer = std::make_unique<VulkanFramebuffer>(device);
-		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(),m_VulkanFramebuffer.get() , physicalDevice, device, surface);
+		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(), m_VulkanFramebuffer.get(), physicalDevice, device, surface);
+		m_VulkanRenderPass = std::make_unique<VulkanRenderPass>( device, physicalDevice);
 
 		createRenderPass();
 		registerPipeline();
@@ -130,6 +134,8 @@ namespace Tokucu {
 
 		m_VulkanBuffer->createCommandBuffers();
 		m_VulkanCore->createSyncObjects();
+		
+		// ImGui will be initialized by ImGuiLayer after renderer is ready
 	}
 	void VulkanRendererAPI::SetClearColor(const glm::vec4& color)
 	{
@@ -290,6 +296,16 @@ namespace Tokucu {
 		vkDestroyRenderPass(device, renderPassHDR, nullptr); renderPassHDR = VK_NULL_HANDLE;
 		vkDestroyRenderPass(device, BRDFRenderPass, nullptr); BRDFRenderPass = VK_NULL_HANDLE;
 
+		// Cleanup ImGui Vulkan resources
+		if (imGuiInitialized) {
+			ImGui_ImplVulkan_Shutdown();
+			imGuiInitialized = false;
+		}
+		if (imGuiDescriptorPool != VK_NULL_HANDLE) {
+			vkDestroyDescriptorPool(device, imGuiDescriptorPool, nullptr);
+			imGuiDescriptorPool = VK_NULL_HANDLE;
+		}
+		
 		// Reset smart pointers for Vulkan objects (calls destructors)
 		// Order matters: destroy VulkanBuffer first to clean up command pool and buffers
 		m_VulkanBuffer.reset();
@@ -378,6 +394,72 @@ namespace Tokucu {
 		}
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
+	
+	void VulkanRendererAPI::initImGui()
+	{
+		ImGui_ImplVulkan_InitInfo init_info = {};
+		init_info.ApiVersion = VK_API_VERSION_1_0; // Use appropriate API version
+		init_info.Instance = m_VulkanCore->getInstance();
+		init_info.PhysicalDevice = physicalDevice;
+		init_info.Device = device;
+		init_info.QueueFamily = m_VulkanCore->getGraphicsQueueFamily();
+		init_info.Queue = graphicsQueue;
+		init_info.PipelineCache = VK_NULL_HANDLE;
+		init_info.DescriptorPool = VK_NULL_HANDLE; // Will be created by ImGui
+		init_info.RenderPass = m_VulkanSwapChain->getRenderPass();
+		init_info.Subpass = 0;
+		init_info.MinImageCount = 2;
+		init_info.ImageCount = m_VulkanSwapChain->getSwapChainImages().size();
+		init_info.MSAASamples = msaaSamples;
+		init_info.Allocator = nullptr;
+		init_info.CheckVkResultFn = nullptr;
+		init_info.MinAllocationSize = 1024 * 1024;
+		
+		// Create descriptor pool for ImGui
+		VkDescriptorPoolSize pool_sizes[] =
+		{
+			{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+			{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+		};
+		VkDescriptorPoolCreateInfo pool_info = {};
+		pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+		pool_info.maxSets = 1000 * IM_ARRAYSIZE(pool_sizes);
+		pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
+		pool_info.pPoolSizes = pool_sizes;
+		VkResult err = vkCreateDescriptorPool(device, &pool_info, nullptr, &imGuiDescriptorPool);
+		if (err != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create ImGui descriptor pool!");
+		}
+		init_info.DescriptorPool = imGuiDescriptorPool;
+		
+		// Initialize ImGui Vulkan backend
+		if (!ImGui_ImplVulkan_Init(&init_info)) {
+			throw std::runtime_error("Failed to initialize ImGui Vulkan backend!");
+		}
+		
+		// Note: In newer ImGui versions, font upload is handled automatically
+		// The first call to ImGui_ImplVulkan_NewFrame() will create the font texture
+		
+		imGuiInitialized = true;
+	}
+	
+	void VulkanRendererAPI::InitializeImGuiForVulkan()
+	{
+		// Only initialize if not already initialized
+		if (!imGuiInitialized) {
+			initImGui();
+		}
+	}
 	void VulkanRendererAPI::Resize(const std::shared_ptr<Window>& window)
 	{
 		glfwWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
@@ -390,16 +472,20 @@ namespace Tokucu {
 	void VulkanRendererAPI::createRenderPass() {
 		
 		// Create the shadow render pass
-		VulkanRenderPass RenderPass(device, physicalDevice, VK_SAMPLE_COUNT_1_BIT, m_VulkanSwapChain->findDepthFormat());
+		//VulkanRenderPass RenderPass(device, physicalDevice, VK_SAMPLE_COUNT_1_BIT, m_VulkanSwapChain->findDepthFormat());
+		//swapRenderPass = m_VulkanSwapChain->getRenderPass();
 		swapRenderPass = m_VulkanSwapChain->getRenderPass();
 
-		shadowRenderPass = RenderPass.createShadowRenderPass();
+		//shadowRenderPass = RenderPass.createShadowRenderPass();
+		shadowRenderPass = m_VulkanRenderPass->createShadowRenderPass();
 
 		// Create the HDR render pass
-		renderPassHDR = RenderPass.createHDRRenderPass();
+		//renderPassHDR = RenderPass.createHDRRenderPass();
+		renderPassHDR = m_VulkanRenderPass->createHDRRenderPass();
 
 		// Create the BRDF LUT render pass
-		BRDFRenderPass = RenderPass.createBRDFRenderPass();
+		//BRDFRenderPass = RenderPass.createBRDFRenderPass();
+		BRDFRenderPass = m_VulkanRenderPass->createBRDFRenderPass();
 		 
 	}
 
@@ -558,102 +644,7 @@ namespace Tokucu {
 		
 		BRDFFrameBuffer = m_VulkanFramebuffer->createFramebuffers(BRDFRenderPass, { BRDFImageView }, 512, 512, 1);
 	}
-	/*ModelData VulkanRendererAPI::loadModel(std::string modelLocation) {
-		// Load model using tinyobjloader
-		//FBX loader is used for the moment...
-
-		tinyobj::attrib_t attrib;
-		std::vector<tinyobj::shape_t> shapes;
-		std::vector<tinyobj::material_t> materials;
-		std::string warn, err;
-		std::vector<Vertex> vertices;
-		std::vector<uint32_t> indices;
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, modelLocation.c_str())) {
-			throw std::runtime_error(warn + err);
-		}
-		for (const auto& shape : shapes) {
-			for (size_t i = 0; i < shape.mesh.indices.size(); i += 3) { // Process triangles
-				Vertex v0{}, v1{}, v2{};
-				tinyobj::index_t index0 = shape.mesh.indices[i];
-				tinyobj::index_t index1 = shape.mesh.indices[i + 1];
-				tinyobj::index_t index2 = shape.mesh.indices[i + 2];
-
-				// Position
-				v0.Position = {
-					attrib.vertices[3 * index0.vertex_index + 0],
-					attrib.vertices[3 * index0.vertex_index + 1],
-					attrib.vertices[3 * index0.vertex_index + 2]
-				};
-				v1.Position = {
-					attrib.vertices[3 * index1.vertex_index + 0],
-					attrib.vertices[3 * index1.vertex_index + 1],
-					attrib.vertices[3 * index1.vertex_index + 2]
-				};
-				v2.Position = {
-					attrib.vertices[3 * index2.vertex_index + 0],
-					attrib.vertices[3 * index2.vertex_index + 1],
-					attrib.vertices[3 * index2.vertex_index + 2]
-				};
-
-				// Normals
-				v0.Normal = {
-					attrib.normals[3 * index0.normal_index + 0],
-					attrib.normals[3 * index0.normal_index + 1],
-					attrib.normals[3 * index0.normal_index + 2]
-				};
-				v1.Normal = {
-					attrib.normals[3 * index1.normal_index + 0],
-					attrib.normals[3 * index1.normal_index + 1],
-					attrib.normals[3 * index1.normal_index + 2]
-				};
-				v2.Normal = {
-					attrib.normals[3 * index2.normal_index + 0],
-					attrib.normals[3 * index2.normal_index + 1],
-					attrib.normals[3 * index2.normal_index + 2]
-				};
-
-				// Texture Coordinates
-				v0.TexCoords = {
-					attrib.texcoords[2 * index0.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index0.texcoord_index + 1]
-				};
-				v1.TexCoords = {
-					attrib.texcoords[2 * index1.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index1.texcoord_index + 1]
-				};
-				v2.TexCoords = {
-					attrib.texcoords[2 * index2.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index2.texcoord_index + 1]
-				};
-
-				// Compute Tangent and Bitangent
-				glm::vec3 edge1 = v1.Position - v0.Position;
-				glm::vec3 edge2 = v2.Position - v0.Position;
-
-				glm::vec2 deltaUV1 = v1.TexCoords - v0.TexCoords;
-				glm::vec2 deltaUV2 = v2.TexCoords - v0.TexCoords;
-
-				float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-
-				glm::vec3 tangent = f * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
-				//glm::vec3 bitangent = f * (-deltaUV2.x * edge1 + deltaUV1.x * edge2);
-
-				// Store Tangent and Bitangent
-				v0.Tangent = v1.Tangent = v2.Tangent = glm::normalize(tangent);
-				//v0.bitangent = v1.bitangent = v2.bitangent = glm::normalize(bitangent);
-
-				// Push vertices
-				vertices.push_back(v0);
-				vertices.push_back(v1);
-				vertices.push_back(v2);
-
-				indices.push_back(indices.size());
-				indices.push_back(indices.size());
-				indices.push_back(indices.size());
-			}
-		}
-		return {vertices, indices};
-	}*/
+	
 	void VulkanRendererAPI::createObject() {
 		BufferData vertexData;
 		BufferData indexData;
@@ -714,9 +705,9 @@ namespace Tokucu {
 			,&m_PipelineBRDF,false,std::nullopt };
 		Objects.push_back(BRDFLud);
 
-		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 	}
 
@@ -766,7 +757,7 @@ namespace Tokucu {
 			{
 				//not using generate mipmap function , mipmapping manually with several FB and imageviews
 				prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
-				
+
 				m_VulkanCreateImage->createImage(prefilterMapResolution, prefilterMapResolution, prefilterMipLevels, VK_SAMPLE_COUNT_1_BIT,
 					VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
 					VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -796,7 +787,7 @@ namespace Tokucu {
 				memcpy(data, pixels, static_cast<size_t>(imageSize));
 				vkUnmapMemory(device, stagingBufferMemory);
 				stbi_image_free(pixels);
-				
+
 				m_VulkanCreateImage->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R32G32B32A32_SFLOAT,
 					VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
 					VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, skyboxHDRImage,
@@ -811,7 +802,7 @@ namespace Tokucu {
 					VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
 				vkDestroyBuffer(device, stagingBuffer, nullptr);
 				vkFreeMemory(device, stagingBufferMemory, nullptr);
-				
+
 				skyboxHDRImageView = m_VulkanCreateImage->createImageView(skyboxHDRImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
 				DescriptorTextureInfo skyboxHDRInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, skyboxHDRImageView };
 				object.texturesInfo.push_back(skyboxHDRInfo);
@@ -822,7 +813,7 @@ namespace Tokucu {
 			{
 				int texWidth = 2048;  // Use consistent size for all faces
 				int texHeight = 2048;
-				
+
 				m_VulkanCreateImage->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT,
 					VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
 					VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -927,7 +918,7 @@ namespace Tokucu {
 
 				VkImage textureImage = VK_NULL_HANDLE;
 				VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
-			
+
 				m_VulkanCreateImage->createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory, 1, 0);
 				m_VulkanBuffer->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
@@ -946,7 +937,7 @@ namespace Tokucu {
 				}
 				else if (type == "diffuse")
 				{
-				//	object.textures.imageViews[1] = textureImageView;
+					//	object.textures.imageViews[1] = textureImageView;
 					DescriptorTextureInfo diffuseInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
 					object.texturesInfo.push_back(diffuseInfo);
 				}
@@ -981,7 +972,7 @@ namespace Tokucu {
 				textureImagesMemory.push_back(textureImageMemory);
 
 			}
-			
+
 		}
 	}
 
@@ -1026,38 +1017,10 @@ namespace Tokucu {
 	}
 
 	void VulkanRendererAPI::createUniformBuffers() {
-	
-		//for (auto& object : Objects) {
-		//	size_t numUBOs = object.pipeline->bufferSize.size();
-		//	object.uniformBuffers.resize(numUBOs);
-		//	object.uniformBuffersMemory.resize(numUBOs);
-		//	object.uniformBuffersMapped.resize(numUBOs);
-		//
-		//	for (size_t uboIndex = 0; uboIndex < numUBOs; uboIndex++) {
-		//		VkDeviceSize bufferSize = object.pipeline->bufferSize[uboIndex];
-		//
-		//		object.uniformBuffers[uboIndex].resize(MAX_FRAMES_IN_FLIGHT);
-		//		object.uniformBuffersMemory[uboIndex].resize(MAX_FRAMES_IN_FLIGHT);
-		//		object.uniformBuffersMapped[uboIndex].resize(MAX_FRAMES_IN_FLIGHT);
-		//
-		//		for (size_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; frame++) {
-		//			createBuffer(bufferSize, object.pipeline->descriptionBufferInfo[uboIndex].second,
-		//				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		//				object.uniformBuffers[uboIndex][frame], object.uniformBuffersMemory[uboIndex][frame]);
-		//
-		//			vkMapMemory(device, object.uniformBuffersMemory[uboIndex][frame], 0, bufferSize, 0,
-		//				&object.uniformBuffersMapped[uboIndex][frame]);
-		//		}
-		//	}
-		//}
-
-
 		for (auto& object : Objects) {
 			m_VulkanBuffer->createUniformBuffers(object);
 
 		}
-
-
 	}
 
 	void VulkanRendererAPI::createDescriptorPool() {
@@ -1086,36 +1049,13 @@ namespace Tokucu {
 		std::array<VkClearValue, 2> clearValues{};
 		clearValues[0].color = { {0.0f, 0.4f, 0.6f, 1.0f} };
 		clearValues[1].depthStencil = { 1.0f, 0 };
-		//first render pass for shadow map
-		VkRenderPassBeginInfo shadowRenderPassInfo{};
-		shadowRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		shadowRenderPassInfo.renderPass = shadowRenderPass;
-		shadowRenderPassInfo.framebuffer = shadowFrameBuffer; // Shadow framebuffer
-		shadowRenderPassInfo.renderArea.extent.width = shadowMapSize;
-		shadowRenderPassInfo.renderArea.extent.height = shadowMapSize;
 
 		VkClearValue clearDepth{};
 		clearDepth.depthStencil = { 1.0f, 0 }; // Clear depth to maximum (1.0)
 
-		shadowRenderPassInfo.clearValueCount = 1;
-		shadowRenderPassInfo.pClearValues = &clearDepth;
-		//viewport and scissor dynamics, need to match with shadow map's size
-		VkViewport viewport{};
-		viewport.x = 0.0f;
-		viewport.y = 0.0f;
-		viewport.width = shadowMapSize;
-		viewport.height = shadowMapSize;
-		viewport.minDepth = 0.0f;
-		viewport.maxDepth = 1.0f;
-
-		VkRect2D scissor{};
-		scissor.offset = { 0, 0 };
-		scissor.extent.width = shadowMapSize;
-		scissor.extent.height = shadowMapSize;
-
-		VkDeviceSize offsets[] = { 0 };
-		vkCmdBeginRenderPass(commandBuffer, &shadowRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 		// Shadow map pass 
+		RenderPassInfo shadowRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(shadowRenderPass, shadowFrameBuffer, clearDepth, shadowMapSize);
+		vkCmdBeginRenderPass(commandBuffer, &shadowRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 		for (int i = 0; i < 2; i++)
 		{
 			int lightindex = i;
@@ -1130,45 +1070,17 @@ namespace Tokucu {
 						throw std::runtime_error("Error: pipeline is NULL before binding!");
 					}
 					vkCmdPushConstants(commandBuffer, object.pipeline->pipelineLayout, VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lightIndexUBO), &indexUBO);
-					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineShadow.pipeline);
-					vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-					vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-					//using specific pipeline with object specific layout...Layouts should be correaleted
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-					vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-					vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, shadowRenderPassInfo, object, currentImage);
 				}
 			}
 		}
 		vkCmdEndRenderPass(commandBuffer);
 		if (!b_cubeconvulation)
 		{
-			//renderpass for hdr skybox
-			VkRenderPassBeginInfo eqToCubeRenderPassInfo{};
-			eqToCubeRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			eqToCubeRenderPassInfo.renderPass = renderPassHDR;
-			eqToCubeRenderPassInfo.framebuffer = HDRCubeFrameBuffer; // hdr framebuffer
-			eqToCubeRenderPassInfo.renderArea.extent.width = 1024;
-			eqToCubeRenderPassInfo.renderArea.extent.height = 1024;
-
-			eqToCubeRenderPassInfo.clearValueCount = 1;
-			eqToCubeRenderPassInfo.pClearValues = &clearDepth;
-
-			viewport.x = 0.0f;
-			viewport.y = 0.0f;
-			viewport.width = 1024;
-			viewport.height = 1024;
-			viewport.minDepth = 0.0f;
-			viewport.maxDepth = 1.0f;
-
-			scissor.offset = { 0, 0 };
-			scissor.extent.width = 1024;
-			scissor.extent.height = 1024;
-
-			vkCmdBeginRenderPass(commandBuffer, &eqToCubeRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			// HDR pass for equirectangular to cubemap conversion
+			RenderPassInfo eqToCubeRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, HDRCubeFrameBuffer, clearDepth, 1024);
+			vkCmdBeginRenderPass(commandBuffer, &eqToCubeRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 			// hdr pass 
-
 			for (auto& object : Objects)
 			{
 				if (object.pipeline->name == "skyboxPipelineHDR")
@@ -1176,40 +1088,14 @@ namespace Tokucu {
 					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
 						throw std::runtime_error("Error: pipeline is NULL before binding!");
 					}
-					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineSkyboxHDR.pipeline);
-					vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-					vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-					//using specific pipeline with object specific layout...Layouts should be correaleted
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-					vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-					vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, eqToCubeRenderPassInfo, object, currentImage);
 				}
 			}
-
 			vkCmdEndRenderPass(commandBuffer);
-			//HDR Convolution pass
-			VkRenderPassBeginInfo CubeConvRenderPassInfo{};
-			CubeConvRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			CubeConvRenderPassInfo.renderPass = renderPassHDR;
-			CubeConvRenderPassInfo.framebuffer = CubeConvolutionFrameBuffer; // hdr framebuffer
-			CubeConvRenderPassInfo.renderArea.extent.width = 32;
-			CubeConvRenderPassInfo.renderArea.extent.height = 32;
 
-			CubeConvRenderPassInfo.clearValueCount = 1;
-			CubeConvRenderPassInfo.pClearValues = &clearDepth;
-
-			viewport.x = 0.0f;
-			viewport.y = 0.0f;
-			viewport.width = 32;
-			viewport.height = 32;
-			viewport.minDepth = 0.0f;
-			viewport.maxDepth = 1.0f;
-
-			scissor.offset = { 0, 0 };
-			scissor.extent.width = 32;
-			scissor.extent.height = 32;
-			vkCmdBeginRenderPass(commandBuffer, &CubeConvRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			// Cube convolution pass
+			RenderPassInfo CubeConvRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, CubeConvolutionFrameBuffer, clearDepth, 32);
+			vkCmdBeginRenderPass(commandBuffer, &CubeConvRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 			for (auto& object : Objects)
 			{
 				if (object.pipeline->name == "CubeConvPipeline")
@@ -1217,40 +1103,15 @@ namespace Tokucu {
 					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
 						throw std::runtime_error("Error: pipeline is NULL before binding!");
 					}
-					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineCubeConv.pipeline);
-					vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-					vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-					//using specific pipeline with object specific layout...Layouts should be correaleted
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-					vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-					vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, CubeConvRenderPassInfo, object, currentImage);
 				}
 			}
 
 			vkCmdEndRenderPass(commandBuffer);
-			//BRDF lud pass
-			VkRenderPassBeginInfo BRDFRenderPassInfo{};
-			BRDFRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			BRDFRenderPassInfo.renderPass = BRDFRenderPass;
-			BRDFRenderPassInfo.framebuffer = BRDFFrameBuffer; // hdr framebuffer
-			BRDFRenderPassInfo.renderArea.extent.width = 512;
-			BRDFRenderPassInfo.renderArea.extent.height = 512;
 
-			BRDFRenderPassInfo.clearValueCount = 1;
-			BRDFRenderPassInfo.pClearValues = &clearDepth;
-
-			viewport.x = 0.0f;
-			viewport.y = 0.0f;
-			viewport.width = 512;
-			viewport.height = 512;
-			viewport.minDepth = 0.0f;
-			viewport.maxDepth = 1.0f;
-
-			scissor.offset = { 0, 0 };
-			scissor.extent.width = 512;
-			scissor.extent.height = 512;
-			vkCmdBeginRenderPass(commandBuffer, &BRDFRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			// BRDF LUT pass
+			RenderPassInfo BRDFRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(BRDFRenderPass, BRDFFrameBuffer, clearDepth, 512);
+			vkCmdBeginRenderPass(commandBuffer, &BRDFRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 			for (auto& object : Objects)
 			{
 				if (object.pipeline->name == "BRDFPipeline")
@@ -1258,14 +1119,7 @@ namespace Tokucu {
 					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
 						throw std::runtime_error("Error: pipeline is NULL before binding!");
 					}
-					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineBRDF.pipeline);
-					vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-					vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-					//using specific pipeline with object specific layout...Layouts should be correaleted
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-					vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-					vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, BRDFRenderPassInfo, object, currentImage);
 				}
 			}
 
@@ -1277,52 +1131,21 @@ namespace Tokucu {
 				uint32_t mipWidth = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 				uint32_t mipHeight = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
-				VkRenderPassBeginInfo prefilterRenderPassInfo{};
-				prefilterRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-				prefilterRenderPassInfo.renderPass = renderPassHDR;
-				//VkFramebuffer prefilterMapFramebuffer = createPrefilterFrameBuffer(mipWidth, mipHeight, mip);
 
 				prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
 				//When creating a framebuffer, each attachment must reference only a single mip level.
-
 				VkImageView prefilterMapTempView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip, 6);
-
 				// Create Framebuffer for prefilter map
 				VkFramebuffer prefilterMapFramebuffer = VK_NULL_HANDLE;
 
-				VkFramebufferCreateInfo prefilterFramebufferInfo{};
-				prefilterFramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-				prefilterFramebufferInfo.renderPass = renderPassHDR;
-				prefilterFramebufferInfo.attachmentCount = 1;
-				prefilterFramebufferInfo.pAttachments = &prefilterMapTempView;
-				prefilterFramebufferInfo.width = mipWidth;
-				prefilterFramebufferInfo.height = mipHeight;
-				prefilterFramebufferInfo.layers = 6;
-				if (vkCreateFramebuffer(device, &prefilterFramebufferInfo, nullptr, &prefilterMapFramebuffer) != VK_SUCCESS) {
-					throw std::runtime_error("failed to create framebuffer!");
-				}
+				prefilterMapFramebuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { prefilterMapTempView }, mipWidth, mipHeight, 6);
+
 				prefilterMapFramebuffers.push_back(prefilterMapFramebuffer);
 				prefilterMapTempViews.push_back(prefilterMapTempView);
-				prefilterRenderPassInfo.framebuffer = prefilterMapFramebuffer;
-				prefilterRenderPassInfo.renderArea.extent.width = mipWidth;
-				prefilterRenderPassInfo.renderArea.extent.height = mipHeight;
 
-				prefilterRenderPassInfo.clearValueCount = 1;
-				prefilterRenderPassInfo.pClearValues = &clearDepth;
+				RenderPassInfo prefilterRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, prefilterMapFramebuffer, clearDepth, mipWidth);
 
-				viewport.x = 0.0f;
-				viewport.y = 0.0f;
-
-				viewport.minDepth = 0.0f;
-				viewport.maxDepth = 1.0f;
-				viewport.width = mipWidth;
-				viewport.height = mipHeight;
-
-				scissor.extent.width = mipWidth;
-				scissor.extent.height = mipHeight;
-				scissor.offset = { 0, 0 };
-
-				vkCmdBeginRenderPass(commandBuffer, &prefilterRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+				vkCmdBeginRenderPass(commandBuffer, &prefilterRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 				// Calculate roughness for this mip level
 				float roughness = static_cast<float>(mip) / static_cast<float>(prefilterMipLevels - 1);
 
@@ -1335,14 +1158,7 @@ namespace Tokucu {
 							throw std::runtime_error("Error: pipeline is NULL before binding!");
 						}
 						vkCmdPushConstants(commandBuffer, object.pipeline->pipelineLayout, VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &roughness);
-						vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelinePrefilter.pipeline);
-						vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-						vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-						//using specific pipeline with object specific layout...Layouts should be correaleted
-						vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-						vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-						vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-						vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+						m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, prefilterRenderPassInfo, object, currentImage);
 					}
 				}
 				vkCmdEndRenderPass(commandBuffer);
@@ -1351,31 +1167,12 @@ namespace Tokucu {
 			prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
 			b_cubeconvulation = true;
 		}
-		//render pass info for main object pass
-		VkRenderPassBeginInfo renderPassInfo{};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = m_VulkanSwapChain->getRenderPass();
-
-		//renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
 
 		std::vector<VkFramebuffer> swapChainFramebuffers = m_VulkanSwapChain->getSwapChainFramebuffers();
-		renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
 
-		renderPassInfo.renderArea.offset = { 0, 0 };
+		RenderPassInfo renderPassInfo = m_VulkanRenderPass->createSwapChainRenderPassInfo(m_VulkanSwapChain->getRenderPass(), swapChainFramebuffers[imageIndex], clearValues,m_VulkanSwapChain->getSwapChainExtent());
 
-		VkExtent2D swapChainExtent = m_VulkanSwapChain->getSwapChainExtent();
-		renderPassInfo.renderArea.extent = swapChainExtent;
-
-
-
-		renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-		renderPassInfo.pClearValues = clearValues.data();
-
-		//scissor and viewport size should be modified for main pass
-		scissor.extent = swapChainExtent;
-		viewport.width = swapChainExtent.width;
-		viewport.height = swapChainExtent.height;
-		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 		for (auto& object : Objects)
 		{
 			if (object.pipeline->name == "defaultPipeline" || object.pipeline->name == "lightPipeline" || object.pipeline->name == "skyboxPipeline")
@@ -1383,18 +1180,24 @@ namespace Tokucu {
 				if (object.pipeline->pipeline == VK_NULL_HANDLE) {
 					throw std::runtime_error("Error: pipeline is NULL before binding!");
 				}
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipeline);
-				vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-				vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-				//VkBuffer vertexBuffers[] = { object.vertexBuffer };
-
-				vkCmdBindVertexBuffers(commandBuffer, 0, 1, &object.vertexBuffer, offsets);
-				vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, object.pipeline->pipelineLayout, 0, 1, &object.descriptorSets[currentFrame], 0, nullptr);
-				vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
+				m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, renderPassInfo, object, currentImage);
 			}
 		}
+		
+		// Render ImGui inside the render pass
+		if (imGuiInitialized) {
+			// Ensure we have the correct ImGui context
+			ImGuiContext* current_context = ImGui::GetCurrentContext();
+			if (current_context != nullptr) {
+				ImDrawData* draw_data = ImGui::GetDrawData();
+				if (draw_data != nullptr) {
+					ImGui_ImplVulkan_RenderDrawData(draw_data, commandBuffer, VK_NULL_HANDLE);
+				}
+			}
+		}
+		
 		vkCmdEndRenderPass(commandBuffer);
+		
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
 		}

@@ -23,6 +23,7 @@ namespace Tokucu
 		void createDescriptorSetLayout(Pipeline* pipeline);
 		void createDescriptorPool(Pipeline* pipeline, uint32_t objectSize);
 		void createDescriptorSets(VulkanObject* object);
+		void renderObject(VkCommandBuffer& commandBuffer, Pipeline* pipeline, RenderPassInfo& renderPassInfo, VulkanObject& object, uint32_t currentFrame);
 		VkVertexInputBindingDescription getBindingDescription();
 		std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions();
 		VkShaderModule createShaderModule(const std::vector<char>& code);
