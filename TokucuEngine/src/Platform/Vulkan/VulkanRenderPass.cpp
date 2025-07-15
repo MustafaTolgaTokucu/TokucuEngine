@@ -124,7 +124,7 @@ namespace Tokucu {
 			throw std::runtime_error("failed to create render pass!");
 		}
 		return shadowRenderPass;
-	
+
 	}
 
 	VkRenderPass VulkanRenderPass::createHDRRenderPass() {

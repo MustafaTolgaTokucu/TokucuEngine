@@ -7,8 +7,8 @@ namespace Tokucu
 	{
 
 	public:
-		VulkanGraphicsPipeline(VulkanCore* vulkanCore,VkDevice device, VkPhysicalDevice physicalDevice) : m_VulkanCore(vulkanCore), device(device), physicalDevice(physicalDevice) {
-		
+		VulkanGraphicsPipeline(VulkanCore* vulkanCore, VkDevice device, VkPhysicalDevice physicalDevice) : m_VulkanCore(vulkanCore), device(device), physicalDevice(physicalDevice) {
+
 			MAX_FRAMES_IN_FLIGHT = m_VulkanCore->getMaxFramesInFlight();
 		}
 		~VulkanGraphicsPipeline() {

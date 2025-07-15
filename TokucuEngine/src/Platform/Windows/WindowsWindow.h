@@ -1,7 +1,7 @@
 #pragma once
 #include "Tokucu/Window.h"
 #include "Tokucu/Renderer/GraphicsContext.h"
-#include "GLFW/glfw3.h"
+//#include "GLFW/glfw3.h"
 
 #include "Tokucu/Renderer/Camera.h"
 
@@ -28,6 +28,9 @@ namespace Tokucu {
 		
 		void processInput(GLFWwindow* window);
 		void mouse_callback(double xpos, double ypos);
+		
+		// Make cursor state accessible for GLFW callbacks
+		bool m_CursorEnabled = true;
 
 	private:
 		virtual void Init(const WindowProps& props);

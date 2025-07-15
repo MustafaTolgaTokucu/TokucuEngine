@@ -15,7 +15,7 @@
 #include "VulkanBuffer.h"
 
 // ImGui Vulkan integration
-#include "imgui/imgui_impl_vulkan.h"
+//#include "imgui/imgui_impl_vulkan.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image/stb_image.h"
@@ -99,6 +99,7 @@ namespace Tokucu {
 			throw std::runtime_error("Failed to create VulkanCore instance!");
 		}
 		//CORE abstraction
+		instance = m_VulkanCore->getInstance();
 		device = m_VulkanCore->getDevice();
 		physicalDevice = m_VulkanCore->getPhysicalDevice();
 		graphicsQueue = m_VulkanCore->getGraphicsQueue();
@@ -108,22 +109,23 @@ namespace Tokucu {
 		MAX_FRAMES_IN_FLIGHT = m_VulkanCore->getMaxFramesInFlight();
 		//CORE abstraction done
 
-		
+
 		m_VulkanCreateImage = std::make_unique<VulkanCreateImage>(device, physicalDevice);
 		m_VulkanGraphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(m_VulkanCore.get(), device, physicalDevice);
 		m_VulkanBuffer = std::make_unique<VulkanBuffer>(m_VulkanCore.get(), physicalDevice, device);
 		m_VulkanFramebuffer = std::make_unique<VulkanFramebuffer>(device);
 		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(), m_VulkanFramebuffer.get(), physicalDevice, device, surface);
-		m_VulkanRenderPass = std::make_unique<VulkanRenderPass>( device, physicalDevice);
+		m_VulkanRenderPass = std::make_unique<VulkanRenderPass>(device, physicalDevice);
+
+		m_VulkanBuffer->createCommandPool(); // <-- Move this up before any image transitions
 
 		createRenderPass();
 		registerPipeline();
 		createGraphicsPipeline();
 		createShadowFramebuffer();
-		
-		m_VulkanBuffer->createCommandPool();
+
 		createObject();
-		
+
 		createTextureSampler();
 		createTextureImage();
 
@@ -135,7 +137,21 @@ namespace Tokucu {
 		m_VulkanBuffer->createCommandBuffers();
 		m_VulkanCore->createSyncObjects();
 		
+		// Cache object lists for performance optimization
+		CacheObjectLists();
+		
+		// Create offscreen resources immediately after Vulkan initialization
+		CreateOffscreenResources();
+		
+		// Verify offscreen resources were created successfully
+		if (m_OffscreenResolveImageView == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("Failed to create offscreen resources during initialization!");
+			throw std::runtime_error("Offscreen resources creation failed!");
+		}
+		TKC_CORE_INFO("Offscreen resources created successfully during initialization");
+		
 		// ImGui will be initialized by ImGuiLayer after renderer is ready
+		// Note: Offscreen resources are now created during initialization
 	}
 	void VulkanRendererAPI::SetClearColor(const glm::vec4& color)
 	{
@@ -144,6 +160,13 @@ namespace Tokucu {
 	{
 		// Ensure all operations are complete before cleanup
 		vkDeviceWaitIdle(device);
+
+		// Wait for all fences to be signaled before destroying command buffers
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			if (m_VulkanCore && m_VulkanCore->getInFlightFences().size() > i) {
+				vkWaitForFences(device, 1, &m_VulkanCore->getInFlightFences()[i], VK_TRUE, UINT64_MAX);
+			}
+		}
 
 		// Destroy images, image views, and free memory
 		auto destroyImageSafe = [&](VkImage& img, VkDeviceMemory& mem) {
@@ -155,19 +178,19 @@ namespace Tokucu {
 				vkFreeMemory(device, mem, nullptr);
 				mem = VK_NULL_HANDLE;
 			}
-		};
+			};
 		auto destroyImageViewSafe = [&](VkImageView& view) {
 			if (view != VK_NULL_HANDLE) {
 				vkDestroyImageView(device, view, nullptr);
 				view = VK_NULL_HANDLE;
 			}
-		};
+			};
 		auto destroySamplerSafe = [&](VkSampler& sampler) {
 			if (sampler != VK_NULL_HANDLE) {
 				vkDestroySampler(device, sampler, nullptr);
 				sampler = VK_NULL_HANDLE;
 			}
-		};
+			};
 
 		destroyImageViewSafe(shadowImageView);
 		destroyImageSafe(shadowImage, shadowImageMemory);
@@ -183,7 +206,7 @@ namespace Tokucu {
 			}
 		}
 		prefilterMapTempViews.clear();
-		
+
 		destroyImageViewSafe(prefilterMapView);
 		destroyImageSafe(prefilterMapImage, prefilterMapImageMemory);
 		destroyImageViewSafe(BRDFImageView);
@@ -305,14 +328,16 @@ namespace Tokucu {
 			vkDestroyDescriptorPool(device, imGuiDescriptorPool, nullptr);
 			imGuiDescriptorPool = VK_NULL_HANDLE;
 		}
-		
+
+
+
 		// Reset smart pointers for Vulkan objects (calls destructors)
 		// Order matters: destroy VulkanBuffer first to clean up command pool and buffers
 		m_VulkanBuffer.reset();
 		m_VulkanSwapChain.reset();
 		m_VulkanGraphicsPipeline.reset();
 		m_VulkanCore.reset();
-		
+
 		// Clear all device references after all Vulkan objects are destroyed
 		device = VK_NULL_HANDLE;
 		physicalDevice = VK_NULL_HANDLE;
@@ -327,6 +352,8 @@ namespace Tokucu {
 	}
 	void VulkanRendererAPI::Render()
 	{
+		// Offscreen resources are now created during initialization, no need to create them here
+
 		vkWaitForFences(device, 1, &m_VulkanCore->getInFlightFences()[currentFrame], VK_TRUE, UINT64_MAX);
 
 		uint32_t imageIndex;
@@ -335,6 +362,8 @@ namespace Tokucu {
 
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 			m_VulkanSwapChain->recreateSwapChain();
+			// Reset offscreen resources flag to force recreation
+			m_OffscreenResourcesCreated = false;
 			return;
 		}
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -384,40 +413,57 @@ namespace Tokucu {
 		result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-			TKC_CORE_INFO("Recreating Swap Chain");
 			framebufferResized = false;
-			// Recreate the swap chain and render pass
 			m_VulkanSwapChain->recreateSwapChain();
+			// Reset offscreen resources flag to force recreation
+			m_OffscreenResourcesCreated = false;
 		}
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
 		}
+		
+		// Mark offscreen resources as created after first successful frame
+		if (!m_OffscreenResourcesCreated) {
+			m_OffscreenResourcesCreated = true;
+		}
+		
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 	
 	void VulkanRendererAPI::initImGui()
 	{
-		ImGui_ImplVulkan_InitInfo init_info = {};
-		init_info.ApiVersion = VK_API_VERSION_1_0; // Use appropriate API version
-		init_info.Instance = m_VulkanCore->getInstance();
-		init_info.PhysicalDevice = physicalDevice;
-		init_info.Device = device;
-		init_info.QueueFamily = m_VulkanCore->getGraphicsQueueFamily();
-		init_info.Queue = graphicsQueue;
-		init_info.PipelineCache = VK_NULL_HANDLE;
-		init_info.DescriptorPool = VK_NULL_HANDLE; // Will be created by ImGui
-		init_info.RenderPass = m_VulkanSwapChain->getRenderPass();
-		init_info.Subpass = 0;
-		init_info.MinImageCount = 2;
-		init_info.ImageCount = m_VulkanSwapChain->getSwapChainImages().size();
-		init_info.MSAASamples = msaaSamples;
-		init_info.Allocator = nullptr;
-		init_info.CheckVkResultFn = nullptr;
-		init_info.MinAllocationSize = 1024 * 1024;
+		TKC_CORE_INFO("Initializing ImGui Vulkan backend...");
 		
-		// Create descriptor pool for ImGui
-		VkDescriptorPoolSize pool_sizes[] =
-		{
+		// Verify offscreen resources are valid (they should already be created in Init())
+		if (m_OffscreenResolveImageView == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("Offscreen resolve image view is null! Cannot initialize ImGui.");
+			return;
+		}
+		
+		TKC_CORE_INFO("Offscreen resolve image view: {}", (ImU64)m_OffscreenResolveImageView);
+		TKC_CORE_INFO("Offscreen extent: {}x{}", m_OffscreenExtent.width, m_OffscreenExtent.height);
+		
+		// Create descriptor set layout for ImGui texture
+		VkDescriptorSetLayoutBinding binding = {};
+		binding.binding = 0;
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		binding.descriptorCount = 1;
+		binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		binding.pImmutableSamplers = nullptr;
+
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &binding;
+
+		if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ImGuiDescriptorSetLayout) != VK_SUCCESS) {
+			TKC_CORE_ERROR("Failed to create ImGui descriptor set layout!");
+			return;
+		}
+		TKC_CORE_INFO("ImGui descriptor set layout created: {}", (ImU64)m_ImGuiDescriptorSetLayout);
+
+		// Create descriptor pool for ImGui with more comprehensive sizes
+		VkDescriptorPoolSize pool_sizes[] = {
 			{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
@@ -430,47 +476,146 @@ namespace Tokucu {
 			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
 			{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
 		};
-		VkDescriptorPoolCreateInfo pool_info = {};
-		pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-		pool_info.maxSets = 1000 * IM_ARRAYSIZE(pool_sizes);
-		pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
-		pool_info.pPoolSizes = pool_sizes;
-		VkResult err = vkCreateDescriptorPool(device, &pool_info, nullptr, &imGuiDescriptorPool);
-		if (err != VK_SUCCESS) {
-			throw std::runtime_error("Failed to create ImGui descriptor pool!");
+
+		VkDescriptorPoolCreateInfo poolInfo = {};
+		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+		poolInfo.maxSets = 1000 * 11; // 11 is the size of pool_sizes array
+		poolInfo.poolSizeCount = 11; // 11 is the size of pool_sizes array
+		poolInfo.pPoolSizes = pool_sizes;
+
+		if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &imGuiDescriptorPool) != VK_SUCCESS) {
+			TKC_CORE_ERROR("Failed to create ImGui descriptor pool!");
+			return;
 		}
-		init_info.DescriptorPool = imGuiDescriptorPool;
+		TKC_CORE_INFO("ImGui descriptor pool created: {}", (ImU64)imGuiDescriptorPool);
+
+		// Allocate descriptor set
+		VkDescriptorSetAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = imGuiDescriptorPool;
+		allocInfo.descriptorSetCount = 1;
+		allocInfo.pSetLayouts = &m_ImGuiDescriptorSetLayout;
+
+		if (vkAllocateDescriptorSets(device, &allocInfo, &m_ImGuiDescriptorSet) != VK_SUCCESS) {
+			TKC_CORE_ERROR("Failed to allocate ImGui descriptor set!");
+			return;
+		}
+		TKC_CORE_INFO("ImGui descriptor set allocated: {}", (ImU64)m_ImGuiDescriptorSet);
 		
+		// Verify descriptor set was allocated
+		if (m_ImGuiDescriptorSet == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("ImGui descriptor set is null after allocation!");
+			return;
+		}
+
+		// Create sampler for ImGui texture
+		VkSamplerCreateInfo samplerInfo = {};
+		samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerInfo.magFilter = VK_FILTER_LINEAR;
+		samplerInfo.minFilter = VK_FILTER_LINEAR;
+		samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.anisotropyEnable = VK_FALSE;
+		samplerInfo.maxAnisotropy = 1.0f;
+		samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+		samplerInfo.unnormalizedCoordinates = VK_FALSE;
+		samplerInfo.compareEnable = VK_FALSE;
+		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.mipLodBias = 0.0f;
+		samplerInfo.minLod = 0.0f;
+		samplerInfo.maxLod = 0.0f;
+
+		if (vkCreateSampler(device, &samplerInfo, nullptr, &m_ImGuiSampler) != VK_SUCCESS) {
+			TKC_CORE_ERROR("Failed to create ImGui sampler!");
+			return;
+		}
+		TKC_CORE_INFO("ImGui sampler created: {}", (ImU64)m_ImGuiSampler);
+
+		// Update descriptor set with the offscreen resolve image view
+		VkDescriptorImageInfo imageInfo = {};
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		imageInfo.imageView = m_OffscreenResolveImageView;
+		imageInfo.sampler = m_ImGuiSampler;
+
+		VkWriteDescriptorSet descriptorWrite = {};
+		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrite.dstSet = m_ImGuiDescriptorSet;
+		descriptorWrite.dstBinding = 0;
+		descriptorWrite.dstArrayElement = 0;
+		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		descriptorWrite.descriptorCount = 1;
+		descriptorWrite.pImageInfo = &imageInfo;
+
+		// Verify all required handles are valid before updating descriptor set
+		if (m_ImGuiDescriptorSet == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("Cannot update descriptor set - descriptor set is null!");
+			return;
+		}
+		if (m_OffscreenResolveImageView == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("Cannot update descriptor set - offscreen resolve image view is null!");
+			return;
+		}
+		if (m_ImGuiSampler == VK_NULL_HANDLE) {
+			TKC_CORE_ERROR("Cannot update descriptor set - ImGui sampler is null!");
+			return;
+		}
+		
+		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+		TKC_CORE_INFO("ImGui descriptor set updated with offscreen resolve image view");
+
 		// Initialize ImGui Vulkan backend
+		ImGui_ImplVulkan_InitInfo init_info = {};
+		init_info.Instance = instance;
+		init_info.PhysicalDevice = physicalDevice;
+		init_info.Device = device;
+		init_info.QueueFamily = m_VulkanCore->getGraphicsQueueFamily();
+		init_info.Queue = graphicsQueue;
+		init_info.PipelineCache = VK_NULL_HANDLE;
+		init_info.DescriptorPool = imGuiDescriptorPool;
+		init_info.RenderPass = m_VulkanSwapChain->getRenderPass();
+		init_info.Subpass = 0;
+		init_info.MinImageCount = m_VulkanSwapChain->getSwapChainImages().size();
+		init_info.ImageCount = m_VulkanSwapChain->getSwapChainImages().size();
+		init_info.MSAASamples = msaaSamples;
+		init_info.Allocator = nullptr;
+		init_info.CheckVkResultFn = nullptr;
+
+		TKC_CORE_INFO("Initializing ImGui Vulkan backend with {} swapchain images", init_info.ImageCount);
 		if (!ImGui_ImplVulkan_Init(&init_info)) {
-			throw std::runtime_error("Failed to initialize ImGui Vulkan backend!");
+			TKC_CORE_ERROR("Failed to initialize ImGui Vulkan backend!");
+			return;
+		}
+		TKC_CORE_INFO("ImGui Vulkan backend initialized successfully");
+
+		// Register the texture with ImGui now that it's initialized
+		TKC_CORE_INFO("Registering offscreen resolve image view as ImGui texture...");
+		VkDescriptorSet textureId = ImGui_ImplVulkan_AddTexture(m_ImGuiSampler, m_OffscreenResolveImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		if (textureId != VK_NULL_HANDLE) {
+			m_ImGuiTextureId = (ImTextureID)textureId;
+			TKC_CORE_INFO("ImGui texture registered successfully: {}", (ImU64)textureId);
+		} else {
+			TKC_CORE_ERROR("Failed to register ImGui texture! Using fallback descriptor set.");
+			m_ImGuiTextureId = (ImTextureID)m_ImGuiDescriptorSet;
 		}
 		
-		// Note: In newer ImGui versions, font upload is handled automatically
-		// The first call to ImGui_ImplVulkan_NewFrame() will create the font texture
-		
+		// Mark ImGui as initialized
 		imGuiInitialized = true;
 	}
 	
-	void VulkanRendererAPI::InitializeImGuiForVulkan()
-	{
-		// Only initialize if not already initialized
-		if (!imGuiInitialized) {
-			initImGui();
-		}
-	}
 	void VulkanRendererAPI::Resize(const std::shared_ptr<Window>& window)
 	{
 		glfwWindow = static_cast<GLFWwindow*>(window->GetNativeWindow());
-		
+
 		//CORE TEST
 		m_VulkanCore->setGLFWWindow(glfwWindow);
 		framebufferResized = true;
 	}
 
 	void VulkanRendererAPI::createRenderPass() {
-		
+
 		// Create the shadow render pass
 		//VulkanRenderPass RenderPass(device, physicalDevice, VK_SAMPLE_COUNT_1_BIT, m_VulkanSwapChain->findDepthFormat());
 		//swapRenderPass = m_VulkanSwapChain->getRenderPass();
@@ -486,7 +631,7 @@ namespace Tokucu {
 		// Create the BRDF LUT render pass
 		//BRDFRenderPass = RenderPass.createBRDFRenderPass();
 		BRDFRenderPass = m_VulkanRenderPass->createBRDFRenderPass();
-		 
+
 	}
 
 	void VulkanRendererAPI::registerPipeline()
@@ -511,7 +656,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&pointLightsInfo,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT},{&shadowUBOInfo,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT}},
 			//{{&ambientInfo},{&diffuseInfo},{&specularInfo},{&normalInfo},{&shadowInfo},{&irradianceInfo},{&prefilterMapInfo},{&BRDFInfo}},
 			8,
-			{{sizeof(UniformBufferObject)},{sizeof(LightAttributes) * pointLights.size()},{sizeof(shadowUBO) * 2}},swapRenderPass,VK_CULL_MODE_BACK_BIT ,msaaSamples };
+			{{sizeof(UniformBufferObject)},{sizeof(LightAttributes) * pointLights.size()},{sizeof(shadowUBO) * 2}},swapRenderPass,VK_CULL_MODE_BACK_BIT ,msaaSamples, true };
 		Pipelines.push_back(&m_Pipeline);
 		//Pipeline for point light object representives
 		m_Pipeline2 = { "lightPipeline" ,"assets/shaders/vertPL.spv", "assets/shaders/fragPL.spv",{},
@@ -520,7 +665,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&colorBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{},
 			0,
-			{{sizeof(UniformBufferObject)},{sizeof(ColorUniform)}},swapRenderPass ,VK_CULL_MODE_BACK_BIT,msaaSamples };
+			{{sizeof(UniformBufferObject)},{sizeof(ColorUniform)}},swapRenderPass ,VK_CULL_MODE_BACK_BIT,msaaSamples, true };
 		Pipelines.push_back(&m_Pipeline2);
 		//Pipeline for skybox rendering using 6 layered cubemap
 		m_PipelineSkybox = { "skyboxPipeline" ,"assets/shaders/skyboxVert.spv", "assets/shaders/skyboxFrag.spv",{},
@@ -529,7 +674,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{{&skyboxInfo} },
 			1,
-			{ {sizeof(UniformBufferObject)} },swapRenderPass,VK_CULL_MODE_FRONT_BIT,msaaSamples
+			{ {sizeof(UniformBufferObject)} },swapRenderPass,VK_CULL_MODE_FRONT_BIT,msaaSamples, true
 		};
 		Pipelines.push_back(&m_PipelineSkybox);
 		//For Cubemap convulation will be usen in diffuse IBL
@@ -540,7 +685,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&cubemapPosMatInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{{&cubeConvInfo} },
 			1,
-			{ {sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6} },renderPassHDR,VK_CULL_MODE_BACK_BIT
+			{ {sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6} },renderPassHDR,VK_CULL_MODE_BACK_BIT, VK_SAMPLE_COUNT_1_BIT, true
 		};
 		Pipelines.push_back(&m_PipelineCubeConv);
 		//HDR Image to cubemap conversion (equirectengular 2D to cube)
@@ -551,7 +696,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&cubemapPosInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{{&skyboxHDRInfo}}, 
 			1,
-			{{sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6}},renderPassHDR,VK_CULL_MODE_BACK_BIT
+			{{sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6}},renderPassHDR,VK_CULL_MODE_BACK_BIT, VK_SAMPLE_COUNT_1_BIT, true
 		};
 		Pipelines.push_back(&m_PipelineSkyboxHDR);
 		//Prefiltering the cubemap for specular IBL
@@ -563,7 +708,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&prefilterPosInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{{&prefilterInfo}}, 
 			1,
-			{{sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6}},renderPassHDR,VK_CULL_MODE_BACK_BIT
+			{{sizeof(UniformBufferObject)},{sizeof(glm::mat4) * 6}},renderPassHDR,VK_CULL_MODE_BACK_BIT, VK_SAMPLE_COUNT_1_BIT, true
 		};
 		Pipelines.push_back(&m_PipelinePrefilter);
 		//BRDF LUT for specular IBL
@@ -572,7 +717,7 @@ namespace Tokucu {
 			{{&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT}},
 			//{},
 			0,
-			{{sizeof(UniformBufferObject)}},BRDFRenderPass,VK_CULL_MODE_NONE
+			{{sizeof(UniformBufferObject)}},BRDFRenderPass,VK_CULL_MODE_NONE, VK_SAMPLE_COUNT_1_BIT, true
 		};
 		Pipelines.push_back(&m_PipelineBRDF);
 		//Shadow mapping pipeline
@@ -590,9 +735,9 @@ namespace Tokucu {
 			{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_SHADER_STAGE_FRAGMENT_BIT}
 		},
 		{ {&transformBufferInfo,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT},{&pointLightsInfo,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT},{&shadowUBOInfo,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT} },
-		//{{&ambientInfo},{&diffuseInfo},{&specularInfo},{&normalInfo},{&shadowInfo},{&irradianceInfo},{&prefilterMapInfo},{&BRDFInfo}},
-		8,	
-		{ {sizeof(UniformBufferObject)},{sizeof(LightAttributes) * pointLights.size()},{sizeof(shadowUBO) * 2} },shadowRenderPass, VK_CULL_MODE_BACK_BIT,VK_SAMPLE_COUNT_1_BIT };
+			//{{&ambientInfo},{&diffuseInfo},{&specularInfo},{&normalInfo},{&shadowInfo},{&irradianceInfo},{&prefilterMapInfo},{&BRDFInfo}},
+			8,
+			{ {sizeof(UniformBufferObject)},{sizeof(LightAttributes) * pointLights.size()},{sizeof(shadowUBO) * 2} },shadowRenderPass, VK_CULL_MODE_BACK_BIT,VK_SAMPLE_COUNT_1_BIT, false };
 		Pipelines.push_back(&m_PipelineShadow);
 	}
 
@@ -610,8 +755,10 @@ namespace Tokucu {
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			shadowImage, shadowImageMemory, 12, 16);
-		shadowImageView = m_VulkanCreateImage->createImageView(shadowImage, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 12);
 		
+		
+		shadowImageView = m_VulkanCreateImage->createImageView(shadowImage, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 12);
+
 		shadowFrameBuffer = m_VulkanFramebuffer->createFramebuffers(shadowRenderPass, { shadowImageView }, shadowMapSize, shadowMapSize, 12);
 
 		// Framebuffer for HDR Cubemap
@@ -631,7 +778,7 @@ namespace Tokucu {
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			CubeConvolutionImage, CubeConvolutionImageMemory, 6, 16);
 		CubeConvolutionImageView = m_VulkanCreateImage->createImageView(CubeConvolutionImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 6);
-		
+
 		CubeConvolutionFrameBuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { CubeConvolutionImageView }, 32, 32, 6);
 
 		// Framebuffer for Prefiltered Cubemap
@@ -640,15 +787,15 @@ namespace Tokucu {
 			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			BRDFImage, BRDFImageMemory, 1, 0);
-		BRDFImageView = m_VulkanCreateImage->createImageView(BRDFImage, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0,1);
-		
+		BRDFImageView = m_VulkanCreateImage->createImageView(BRDFImage, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+
 		BRDFFrameBuffer = m_VulkanFramebuffer->createFramebuffers(BRDFRenderPass, { BRDFImageView }, 512, 512, 1);
 	}
-	
+
 	void VulkanRendererAPI::createObject() {
 		BufferData vertexData;
 		BufferData indexData;
-		
+
 		vertexData = m_VulkanBuffer->createVertexBuffer(cubeVertices);
 		indexData = m_VulkanBuffer->createIndexBuffer(cubeIndices);
 		BufferData planeVertexData = m_VulkanBuffer->createVertexBuffer(secondVertices);
@@ -690,7 +837,7 @@ namespace Tokucu {
 
 		VulkanObject skyboxHDR = { "skyBoxHDR", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory//, getBindingDescription() , getAttributeDescriptions()
 			,&m_PipelineSkyboxHDR,false,std::nullopt,
-		{{"skyboxHDR","assets/textures/qwantani_noon_4k.hdr"}} };
+		{{"skyboxHDR","assets/textures/overcast_soil_puresky_4k.hdr"}} };
 		Objects.push_back(skyboxHDR);
 
 		VulkanObject cubeConv = { "cubeConv", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory//, getBindingDescription() , getAttributeDescriptions()
@@ -706,7 +853,7 @@ namespace Tokucu {
 		Objects.push_back(BRDFLud);
 
 		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
 		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 	}
@@ -763,11 +910,16 @@ namespace Tokucu {
 					VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					prefilterMapImage, prefilterMapImageMemory, 6, 16);
+				
+			
+				
 				prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
 				DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ,textureSampler,HDRCubeView };
 				object.texturesInfo.push_back(prefilterInfo);
 
 			}
+			
+
 			// Create texture image for HDR skybox having one layer (equirectangular)
 			if (object.name == "skyBoxHDR")
 			{
@@ -980,8 +1132,8 @@ namespace Tokucu {
 
 		VkPhysicalDeviceProperties properties{};
 		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
-		
-		 // standard color sampler
+
+		// standard color sampler
 		textureSampler = m_VulkanCreateImage->createSampler(
 			VK_FILTER_LINEAR, VK_FILTER_LINEAR,
 			VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -1028,165 +1180,201 @@ namespace Tokucu {
 			m_VulkanGraphicsPipeline->createDescriptorPool(pipeline, Objects.size());
 		}
 	}
-	
+
 	void VulkanRendererAPI::createDescriptorSets() {
 		for (auto& object : Objects) {
 			m_VulkanGraphicsPipeline->createDescriptorSets(&object);
 		}
+		TKC_CORE_INFO("Descriptor sets created for {} objects", Objects.size());
 	}
 
 	void VulkanRendererAPI::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage) {
-		
+
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		beginInfo.flags = 0; // Optional
-		beginInfo.pInheritanceInfo = nullptr; // Optional
+		beginInfo.flags = 0;
+		beginInfo.pInheritanceInfo = nullptr;
 
 		if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
 			throw std::runtime_error("failed to begin recording command buffer!");
 		}
 
+		// Pre-compute clear values once
 		std::array<VkClearValue, 2> clearValues{};
 		clearValues[0].color = { {0.0f, 0.4f, 0.6f, 1.0f} };
 		clearValues[1].depthStencil = { 1.0f, 0 };
 
 		VkClearValue clearDepth{};
-		clearDepth.depthStencil = { 1.0f, 0 }; // Clear depth to maximum (1.0)
+		clearDepth.depthStencil = { 1.0f, 0 };
 
-		// Shadow map pass 
-		RenderPassInfo shadowRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(shadowRenderPass, shadowFrameBuffer, clearDepth, shadowMapSize);
-		vkCmdBeginRenderPass(commandBuffer, &shadowRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-		for (int i = 0; i < 2; i++)
-		{
-			int lightindex = i;
-			lightIndexUBO indexUBO = {};
-			indexUBO.lightIndex = lightindex;
-			for (auto& object : Objects)
-			{
-				//Do not create shadows for light objects
-				if (object.pipeline->name == "defaultPipeline")
-				{
-					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-						throw std::runtime_error("Error: pipeline is NULL before binding!");
-					}
-					vkCmdPushConstants(commandBuffer, object.pipeline->pipelineLayout, VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lightIndexUBO), &indexUBO);
-					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, shadowRenderPassInfo, object, currentImage);
-				}
+		// === SHADOW PASS (Every frame - necessary for dynamic lighting) ===
+		// Only render shadows if we have objects that cast shadows
+		bool hasShadowCasters = false;
+		for (const auto& object : Objects) {
+			if (object.pipeline->name == "defaultPipeline") {
+				hasShadowCasters = true;
+				break;
 			}
 		}
-		vkCmdEndRenderPass(commandBuffer);
-		if (!b_cubeconvulation)
-		{
-			// HDR pass for equirectangular to cubemap conversion
+
+		if (hasShadowCasters && m_PipelineShadow.pipeline != VK_NULL_HANDLE) {
+			RenderPassInfo shadowRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(shadowRenderPass, shadowFrameBuffer, clearDepth, shadowMapSize);
+			vkCmdBeginRenderPass(commandBuffer, &shadowRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			
+			// Render shadow maps for both lights
+			for (int i = 0; i < 2; i++) {
+				lightIndexUBO indexUBO = {};
+				indexUBO.lightIndex = i;
+				
+				for (auto& object : Objects) {
+					if (object.pipeline->name == "defaultPipeline") {
+						vkCmdPushConstants(commandBuffer, m_PipelineShadow.pipelineLayout, 
+							VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+							0, sizeof(lightIndexUBO), &indexUBO);
+						m_VulkanGraphicsPipeline->renderObject(commandBuffer, &m_PipelineShadow, shadowRenderPassInfo, object, currentImage);
+					}
+				}
+			}
+			vkCmdEndRenderPass(commandBuffer);
+		}
+
+		// === ONE-TIME IBL PREPROCESSING (Only on first frame) ===
+		if (!b_cubeconvulation) {
+			// HDR to cubemap conversion
 			RenderPassInfo eqToCubeRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, HDRCubeFrameBuffer, clearDepth, 1024);
 			vkCmdBeginRenderPass(commandBuffer, &eqToCubeRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			// hdr pass 
-			for (auto& object : Objects)
-			{
-				if (object.pipeline->name == "skyboxPipelineHDR")
-				{
-					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-						throw std::runtime_error("Error: pipeline is NULL before binding!");
-					}
+			
+			for (auto& object : Objects) {
+				if (object.pipeline->name == "skyboxPipelineHDR" && object.pipeline->pipeline != VK_NULL_HANDLE) {
 					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, eqToCubeRenderPassInfo, object, currentImage);
 				}
 			}
 			vkCmdEndRenderPass(commandBuffer);
 
-			// Cube convolution pass
+			// Cube convolution for diffuse IBL
 			RenderPassInfo CubeConvRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, CubeConvolutionFrameBuffer, clearDepth, 32);
 			vkCmdBeginRenderPass(commandBuffer, &CubeConvRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			for (auto& object : Objects)
-			{
-				if (object.pipeline->name == "CubeConvPipeline")
-				{
-					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-						throw std::runtime_error("Error: pipeline is NULL before binding!");
-					}
+			
+			for (auto& object : Objects) {
+				if (object.pipeline->name == "CubeConvPipeline" && object.pipeline->pipeline != VK_NULL_HANDLE) {
 					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, CubeConvRenderPassInfo, object, currentImage);
 				}
 			}
-
 			vkCmdEndRenderPass(commandBuffer);
 
-			// BRDF LUT pass
+			// BRDF LUT generation
 			RenderPassInfo BRDFRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(BRDFRenderPass, BRDFFrameBuffer, clearDepth, 512);
 			vkCmdBeginRenderPass(commandBuffer, &BRDFRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			for (auto& object : Objects)
-			{
-				if (object.pipeline->name == "BRDFPipeline")
-				{
-					if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-						throw std::runtime_error("Error: pipeline is NULL before binding!");
-					}
+			
+			for (auto& object : Objects) {
+				if (object.pipeline->name == "BRDFPipeline" && object.pipeline->pipeline != VK_NULL_HANDLE) {
 					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, BRDFRenderPassInfo, object, currentImage);
 				}
 			}
-
 			vkCmdEndRenderPass(commandBuffer);
 
-			//prefilter pass for specular ibl
-			for (size_t mip = 0; mip < prefilterMipLevels; mip++)
-			{
+			// Prefilter map generation (specular IBL)
+			prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
+			
+			for (size_t mip = 0; mip < prefilterMipLevels; mip++) {
 				uint32_t mipWidth = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 				uint32_t mipHeight = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
-				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
 
-				prefilterMipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(prefilterMapResolution, prefilterMapResolution)))) + 1;
-				//When creating a framebuffer, each attachment must reference only a single mip level.
-				VkImageView prefilterMapTempView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip, 6);
-				// Create Framebuffer for prefilter map
-				VkFramebuffer prefilterMapFramebuffer = VK_NULL_HANDLE;
-
-				prefilterMapFramebuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { prefilterMapTempView }, mipWidth, mipHeight, 6);
-
+				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
+					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
+				
+				VkImageView prefilterMapTempView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
+					VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip, 6);
+				
+				VkFramebuffer prefilterMapFramebuffer = m_VulkanFramebuffer->createFramebuffers(renderPassHDR, { prefilterMapTempView }, mipWidth, mipHeight, 6);
 				prefilterMapFramebuffers.push_back(prefilterMapFramebuffer);
 				prefilterMapTempViews.push_back(prefilterMapTempView);
 
 				RenderPassInfo prefilterRenderPassInfo = m_VulkanRenderPass->createRenderPassInfo(renderPassHDR, prefilterMapFramebuffer, clearDepth, mipWidth);
-
 				vkCmdBeginRenderPass(commandBuffer, &prefilterRenderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-				// Calculate roughness for this mip level
+				
 				float roughness = static_cast<float>(mip) / static_cast<float>(prefilterMipLevels - 1);
-
-				for (auto& object : Objects)
-				{
-					if (object.pipeline->name == "prefilterPipeline")
-					{
-						//TKC_CORE_INFO("prefilterPipeline");
-						if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-							throw std::runtime_error("Error: pipeline is NULL before binding!");
-						}
-						vkCmdPushConstants(commandBuffer, object.pipeline->pipelineLayout, VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &roughness);
+				
+				for (auto& object : Objects) {
+					if (object.pipeline->name == "prefilterPipeline" && object.pipeline->pipeline != VK_NULL_HANDLE) {
+						vkCmdPushConstants(commandBuffer, object.pipeline->pipelineLayout, 
+							VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+							0, sizeof(float), &roughness);
 						m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, prefilterRenderPassInfo, object, currentImage);
 					}
 				}
 				vkCmdEndRenderPass(commandBuffer);
-				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
+				
+				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 
+					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
 			}
-			prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
+			
+			prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
+				VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
 			b_cubeconvulation = true;
 		}
 
-		std::vector<VkFramebuffer> swapChainFramebuffers = m_VulkanSwapChain->getSwapChainFramebuffers();
-
-		RenderPassInfo renderPassInfo = m_VulkanRenderPass->createSwapChainRenderPassInfo(m_VulkanSwapChain->getRenderPass(), swapChainFramebuffers[imageIndex], clearValues,m_VulkanSwapChain->getSwapChainExtent());
-
-		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-		for (auto& object : Objects)
-		{
-			if (object.pipeline->name == "defaultPipeline" || object.pipeline->name == "lightPipeline" || object.pipeline->name == "skyboxPipeline")
-			{
-				if (object.pipeline->pipeline == VK_NULL_HANDLE) {
-					throw std::runtime_error("Error: pipeline is NULL before binding!");
+		// === MAIN SCENE RENDERING (Choose ONE render pass) ===
+		// Since you have both swapchain and offscreen rendering, choose the appropriate one
+		// For ImGui viewport, use offscreen rendering; for direct display, use swapchain
+		
+		// OPTION 1: Render to offscreen texture (for ImGui viewport)
+		if (m_OffscreenRenderPass != VK_NULL_HANDLE && m_OffscreenFramebuffer != VK_NULL_HANDLE && 
+			m_OffscreenColorImageView != VK_NULL_HANDLE && m_OffscreenDepthImageView != VK_NULL_HANDLE && 
+			m_OffscreenResolveImageView != VK_NULL_HANDLE) {
+			
+			// Transition offscreen resolve image to color attachment layout
+			if (m_OffscreenResolveImage != VK_NULL_HANDLE && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
+				try {
+					m_VulkanBuffer->transitionImageLayout(
+						m_OffscreenResolveImage, m_OffscreenFormat,
+						VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+						VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
 				}
-				m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, renderPassInfo, object, currentImage);
+				catch (const std::exception& e) {
+					TKC_CORE_ERROR("Failed to transition offscreen resolve image: {}", e.what());
+				}
+			}
+			
+			RenderPassInfo offscreenPassInfo = m_VulkanRenderPass->createSwapChainRenderPassInfo(
+				m_OffscreenRenderPass, m_OffscreenFramebuffer, clearValues, m_OffscreenExtent);
+			
+			vkCmdBeginRenderPass(commandBuffer, &offscreenPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			
+			// Render scene objects to offscreen framebuffer
+			for (auto& object : Objects) {
+				if ((object.pipeline->name == "defaultPipeline" || object.pipeline->name == "lightPipeline" || object.pipeline->name == "skyboxPipeline") 
+					&& object.pipeline->pipeline != VK_NULL_HANDLE) {
+					m_VulkanGraphicsPipeline->renderObject(commandBuffer, object.pipeline, offscreenPassInfo, object, currentImage);
+				}
+			}
+			vkCmdEndRenderPass(commandBuffer);
+		
+			// Transition offscreen resolve image to shader read layout for ImGui texture
+			if (m_OffscreenResolveImage != VK_NULL_HANDLE && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
+				try {
+					m_VulkanBuffer->transitionImageLayout(
+						m_OffscreenResolveImage, m_OffscreenFormat,
+						VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
+				}
+				catch (const std::exception& e) {
+					TKC_CORE_ERROR("Failed to transition offscreen resolve image to SHADER_READ_ONLY_OPTIMAL: {}", e.what());
+				}
 			}
 		}
+
+		// === IMGUI RENDERING (Always render to swapchain) ===
+		std::vector<VkFramebuffer> swapChainFramebuffers = m_VulkanSwapChain->getSwapChainFramebuffers();
+		RenderPassInfo renderPassInfo = m_VulkanRenderPass->createSwapChainRenderPassInfo(
+			m_VulkanSwapChain->getRenderPass(), swapChainFramebuffers[imageIndex], clearValues, m_VulkanSwapChain->getSwapChainExtent());
 		
-		// Render ImGui inside the render pass
+		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo.renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+		
+		// Render ImGui interface to main window
 		if (imGuiInitialized) {
-			// Ensure we have the correct ImGui context
 			ImGuiContext* current_context = ImGui::GetCurrentContext();
 			if (current_context != nullptr) {
 				ImDrawData* draw_data = ImGui::GetDrawData();
@@ -1197,7 +1385,7 @@ namespace Tokucu {
 		}
 		
 		vkCmdEndRenderPass(commandBuffer);
-		
+
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
 		}
@@ -1217,50 +1405,81 @@ namespace Tokucu {
 		glm::mat4 lightProjection = glm::perspective(glm::radians(90.0f), 1.f, 0.1f, 100.f);
 		glm::vec3 LightSourcePosition2(5 * cos(time), 0.0f, 5 * sin(time));
 
-		objectTransformations["Shotgun"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -3.0f, 5.0f));
-		objectTransformations["Helmet"] = glm::translate(glm::mat4(1.0f), glm::vec3(7.0f, -20.0f, 0.0f));
-		//objectTransformations["Shotgun"] = glm::scale(objectTransformations["Shotgun"], glm::vec3(0.1));
-		objectTransformations["Helmet"] = glm::scale(objectTransformations["Helmet"], glm::vec3(0.1));
-		//objectTransformations["Shotgun"] = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		//objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-5.0f, -3.0f, 5.0f));
-		objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-7, -6.0f, 0));
+		// Only set default transformations if they haven't been modified by SceneEditor
+		if (m_ModifiedObjects.find("Shotgun") == m_ModifiedObjects.end() || !m_ModifiedObjects["Shotgun"]) {
+			objectTransformations["Shotgun"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -3.0f, 5.0f));
+		}
+		if (m_ModifiedObjects.find("Helmet") == m_ModifiedObjects.end() || !m_ModifiedObjects["Helmet"]) {
+			objectTransformations["Helmet"] = glm::translate(glm::mat4(1.0f), glm::vec3(7.0f, -20.0f, 0.0f));
+			objectTransformations["Helmet"] = glm::scale(objectTransformations["Helmet"], glm::vec3(0.1));
+		}
+		if (m_ModifiedObjects.find("Glock") == m_ModifiedObjects.end() || !m_ModifiedObjects["Glock"]) {
+			objectTransformations["Glock"] = glm::translate(glm::mat4(1.0f), glm::vec3(-7, -6.0f, 0));
+		}
+		if (m_ModifiedObjects.find("target") == m_ModifiedObjects.end() || !m_ModifiedObjects["target"]) {
+			objectTransformations["target"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.f));
+		}
+		if (m_ModifiedObjects.find("realCube") == m_ModifiedObjects.end() || !m_ModifiedObjects["realCube"]) {
+			objectTransformations["realCube"] = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		}
 
-		objectTransformations["target"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.f));
-		objectTransformations["realCube"] = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		// Room walls - only set if not modified
+		if (m_ModifiedObjects.find("base") == m_ModifiedObjects.end() || !m_ModifiedObjects["base"]) {
+			objectTransformations["base"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -7, 0.f));
+			objectTransformations["base"] = glm::scale(objectTransformations["base"], glm::vec3(50.f, 0.3f, 50.f));
+		}
+		if (m_ModifiedObjects.find("top") == m_ModifiedObjects.end() || !m_ModifiedObjects["top"]) {
+			objectTransformations["top"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 25, 0.f));
+			objectTransformations["top"] = glm::scale(objectTransformations["top"], glm::vec3(50.f, 0.3f, 50.f));
+		}
+		if (m_ModifiedObjects.find("right") == m_ModifiedObjects.end() || !m_ModifiedObjects["right"]) {
+			objectTransformations["right"] = glm::translate(glm::mat4(1.0f), glm::vec3(25, 0.0f, 0.f));
+			objectTransformations["right"] = glm::scale(objectTransformations["right"], glm::vec3(0.3f, 50.f, 50.f));
+		}
+		if (m_ModifiedObjects.find("left") == m_ModifiedObjects.end() || !m_ModifiedObjects["left"]) {
+			objectTransformations["left"] = glm::translate(glm::mat4(1.0f), glm::vec3(-25, 0.0f, 0.f));
+			objectTransformations["left"] = glm::scale(objectTransformations["left"], glm::vec3(0.3f, 50.f, 50.f));
+		}
+		if (m_ModifiedObjects.find("front") == m_ModifiedObjects.end() || !m_ModifiedObjects["front"]) {
+			objectTransformations["front"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 25));
+			objectTransformations["front"] = glm::scale(objectTransformations["front"], glm::vec3(50.f, 50.f, 0.3f));
+		}
+		if (m_ModifiedObjects.find("back") == m_ModifiedObjects.end() || !m_ModifiedObjects["back"]) {
+			objectTransformations["back"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -25));
+			objectTransformations["back"] = glm::scale(objectTransformations["back"], glm::vec3(50.f, 50.f, 0.3f));
+		}
 
-		objectTransformations["base"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -7, 0.f));
-		objectTransformations["base"] = glm::scale(objectTransformations["base"], glm::vec3(50.f, 0.3f, 50.f));
+		// Light objects - only update if not modified by SceneEditor
+		if (m_ModifiedObjects.find("pointLight1") == m_ModifiedObjects.end() || !m_ModifiedObjects["pointLight1"]) {
+			objectTransformations["pointLight1"] = glm::translate(glm::mat4(1.0f), LightSourcePosition);
+			objectTransformations["pointLight1"] = glm::scale(objectTransformations["pointLight1"], glm::vec3(0.2f));
+		}
+		if (m_ModifiedObjects.find("pointLight2") == m_ModifiedObjects.end() || !m_ModifiedObjects["pointLight2"]) {
+			objectTransformations["pointLight2"] = glm::translate(glm::mat4(1.0f), LightSourcePosition2);
+			objectTransformations["pointLight2"] = glm::scale(objectTransformations["pointLight2"], glm::vec3(0.2f));
+		}
 
-		objectTransformations["top"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 25, 0.f));
-		objectTransformations["top"] = glm::scale(objectTransformations["top"], glm::vec3(50.f, 0.3f, 50.f));
+		// Skybox objects - only set if not modified
+		if (m_ModifiedObjects.find("skyBox") == m_ModifiedObjects.end() || !m_ModifiedObjects["skyBox"]) {
+			objectTransformations["skyBox"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
+		}
+		if (m_ModifiedObjects.find("skyBoxHDR") == m_ModifiedObjects.end() || !m_ModifiedObjects["skyBoxHDR"]) {
+			objectTransformations["skyBoxHDR"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
+		}
+		if (m_ModifiedObjects.find("cubeConv") == m_ModifiedObjects.end() || !m_ModifiedObjects["cubeConv"]) {
+			objectTransformations["cubeConv"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
+		}
+		if (m_ModifiedObjects.find("prefilterCube") == m_ModifiedObjects.end() || !m_ModifiedObjects["prefilterCube"]) {
+			objectTransformations["prefilterCube"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
+		}
 
-		objectTransformations["right"] = glm::translate(glm::mat4(1.0f), glm::vec3(25, 0.0f, 0.f));
-		objectTransformations["right"] = glm::scale(objectTransformations["right"], glm::vec3(0.3f, 50.f, 50.f));
-
-		objectTransformations["left"] = glm::translate(glm::mat4(1.0f), glm::vec3(-25, 0.0f, 0.f));
-		objectTransformations["left"] = glm::scale(objectTransformations["left"], glm::vec3(0.3f, 50.f, 50.f));
-
-		objectTransformations["front"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 25));
-		objectTransformations["front"] = glm::scale(objectTransformations["front"], glm::vec3(50.f, 50.f, 0.3f));
-
-		objectTransformations["back"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -25));
-		objectTransformations["back"] = glm::scale(objectTransformations["back"], glm::vec3(50.f, 50.f, 0.3f));
-
-		objectTransformations["pointLight1"] = glm::translate(glm::mat4(1.0f), LightSourcePosition);
-		//objectTransformations["pointLight2"] = glm::translate(glm::mat4(1.0f), glm::vec3(-5.0f, 0.0f, 10.f));
-		objectTransformations["pointLight2"] = glm::translate(glm::mat4(1.0f), LightSourcePosition2);
-		objectTransformations["pointLight1"] = glm::scale(objectTransformations["pointLight1"], glm::vec3(0.2f));
-		objectTransformations["pointLight2"] = glm::scale(objectTransformations["pointLight2"], glm::vec3(0.2f));
-
-		//objectTransformations["skyBox"] = glm::mat4(1.0f);
-		objectTransformations["skyBox"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
-		objectTransformations["skyBoxHDR"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
-		objectTransformations["cubeConv"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
-		objectTransformations["prefilterCube"] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.f));
-		//objectTransformations["skyBox"] = glm::scale(objectTransformations["skyBox"], glm::vec3(50.f, 50.f, 50.f));
-
-		objectColor["pointLight1"] = glm::vec3(0.5f, 0.7f, 0.0f);
-		objectColor["pointLight2"] = glm::vec3(0, 0.8, 0.8);
+		// Only set default colors if not modified by SceneEditor
+		if (m_ModifiedObjects.find("pointLight1") == m_ModifiedObjects.end() || !m_ModifiedObjects["pointLight1"]) {
+			objectColor["pointLight1"] = glm::vec3(0.5f, 0.7f, 0.0f);
+		}
+		if (m_ModifiedObjects.find("pointLight2") == m_ModifiedObjects.end() || !m_ModifiedObjects["pointLight2"]) {
+			objectColor["pointLight2"] = glm::vec3(0, 0.8, 0.8);
+		}
 		glm::mat4 shadowMatrixPL1[] = {
 			{ {lightProjection * glm::lookAt(LightSourcePosition, LightSourcePosition + glm::vec3(1.0, 0.0, 0.0), glm::vec3(0.0, -1.0, 0.0)) } } , // Right (+X)
 			{ {lightProjection * glm::lookAt(LightSourcePosition, LightSourcePosition + glm::vec3(-1.0, 0.0, 0.0), glm::vec3(0.0, -1.0, 0.0))} } , // Left (-X)
@@ -1337,5 +1556,229 @@ namespace Tokucu {
 		}
 	}
 
+	void VulkanRendererAPI::CreateOffscreenResources()
+	{
+		TKC_CORE_INFO("Creating offscreen resources...");
+		
+		// Wait for device to be idle before recreating resources
+		vkDeviceWaitIdle(device);
+		
+		// Get swapchain extent and format
+		m_OffscreenFormat = m_VulkanSwapChain->getSwapChainImageFormat();
+		m_OffscreenExtent = m_VulkanSwapChain->getSwapChainExtent();
+		
+		TKC_CORE_INFO("Offscreen format: {}, extent: {}x{}", static_cast<int>(m_OffscreenFormat), m_OffscreenExtent.width, m_OffscreenExtent.height);
+		
+		// Cleanup existing offscreen resources
+		if (m_OffscreenColorImageView) vkDestroyImageView(device, m_OffscreenColorImageView, nullptr);
+		if (m_OffscreenColorImage) vkDestroyImage(device, m_OffscreenColorImage, nullptr);
+		if (m_OffscreenColorImageMemory) vkFreeMemory(device, m_OffscreenColorImageMemory, nullptr);
 
+		if (m_OffscreenResolveImageView) vkDestroyImageView(device, m_OffscreenResolveImageView, nullptr);
+		if (m_OffscreenResolveImage) vkDestroyImage(device, m_OffscreenResolveImage, nullptr);
+		if (m_OffscreenResolveImageMemory) vkFreeMemory(device, m_OffscreenResolveImageMemory, nullptr);
+
+		if (m_OffscreenDepthImageView) vkDestroyImageView(device, m_OffscreenDepthImageView, nullptr);
+		if (m_OffscreenDepthImage) vkDestroyImage(device, m_OffscreenDepthImage, nullptr);
+		if (m_OffscreenDepthImageMemory) vkFreeMemory(device, m_OffscreenDepthImageMemory, nullptr);
+
+		// Reset handles
+		m_OffscreenColorImageView = VK_NULL_HANDLE;
+		m_OffscreenColorImage = VK_NULL_HANDLE;
+		m_OffscreenColorImageMemory = VK_NULL_HANDLE;
+		m_OffscreenResolveImageView = VK_NULL_HANDLE;
+		m_OffscreenResolveImage = VK_NULL_HANDLE;
+		m_OffscreenResolveImageMemory = VK_NULL_HANDLE;
+		m_OffscreenDepthImageView = VK_NULL_HANDLE;
+		m_OffscreenDepthImage = VK_NULL_HANDLE;
+		m_OffscreenDepthImageMemory = VK_NULL_HANDLE;
+
+		// Create offscreen images
+		VkFormat depthFormat = m_VulkanSwapChain->findDepthFormat();
+		TKC_CORE_INFO("Depth format: {}", static_cast<int>(depthFormat));
+
+		if (m_OffscreenExtent.width > 0 && m_OffscreenExtent.height > 0 && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
+			TKC_CORE_INFO("Creating offscreen images...");
+			
+			// Color image (MSAA)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, m_OffscreenFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenColorImage, m_OffscreenColorImageMemory, 1, 0);
+			m_OffscreenColorImageView = m_VulkanCreateImage->createImageView(
+				m_OffscreenColorImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+			TKC_CORE_INFO("Color image created: {}, view: {}", (ImU64)m_OffscreenColorImage, (ImU64)m_OffscreenColorImageView);
+
+			// Resolve image (single-sampled, for ImGui)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, VK_SAMPLE_COUNT_1_BIT, m_OffscreenFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenResolveImage, m_OffscreenResolveImageMemory, 1, 0);
+			m_OffscreenResolveImageView = m_VulkanCreateImage->createImageView(
+				m_OffscreenResolveImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+			TKC_CORE_INFO("Resolve image created: {}, view: {}", (ImU64)m_OffscreenResolveImage, (ImU64)m_OffscreenResolveImageView);
+
+			// Note: The image starts in UNDEFINED layout and will be transitioned to COLOR_ATTACHMENT_OPTIMAL
+			// when needed in the command buffer recording
+
+			// Depth image (MSAA)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, depthFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenDepthImage, m_OffscreenDepthImageMemory, 1, 0);
+			m_OffscreenDepthImageView = m_VulkanCreateImage->createImageView(
+				m_OffscreenDepthImage, depthFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 1);
+			TKC_CORE_INFO("Depth image created: {}, view: {}", (ImU64)m_OffscreenDepthImage, (ImU64)m_OffscreenDepthImageView);
+		}
+		else {
+			TKC_CORE_ERROR("Invalid offscreen extent or format - width: {}, height: {}, format: {}", 
+				m_OffscreenExtent.width, m_OffscreenExtent.height, static_cast<int>(m_OffscreenFormat));
+		}
+
+		// Create offscreen render pass and framebuffer
+		// We need a custom render pass for offscreen that sets the correct final layout
+		m_OffscreenRenderPass = CreateOffscreenRenderPass(msaaSamples, m_OffscreenFormat);
+		TKC_CORE_INFO("Offscreen render pass created: {}", (ImU64)m_OffscreenRenderPass);
+
+		if (m_OffscreenColorImageView != VK_NULL_HANDLE && m_OffscreenDepthImageView != VK_NULL_HANDLE && m_OffscreenResolveImageView != VK_NULL_HANDLE) {
+			std::vector<VkImageView> attachments = {
+				m_OffscreenColorImageView, m_OffscreenDepthImageView, m_OffscreenResolveImageView
+			};
+			m_OffscreenFramebuffer = m_VulkanFramebuffer->createFramebuffers(
+				m_OffscreenRenderPass, attachments, m_OffscreenExtent.width, m_OffscreenExtent.height, 1);
+			TKC_CORE_INFO("Offscreen framebuffer created: {}", (ImU64)m_OffscreenFramebuffer);
+		}
+		else {
+					TKC_CORE_ERROR("Failed to create offscreen framebuffer - color view: {}, depth view: {}, resolve view: {}", 
+			(ImU64)m_OffscreenColorImageView, (ImU64)m_OffscreenDepthImageView, (ImU64)m_OffscreenResolveImageView);
+		}
+		
+		// Mark offscreen resources as created first
+		m_OffscreenResourcesCreated = true;
+		TKC_CORE_INFO("Offscreen resources creation completed");
+		
+		// Update descriptor sets to use the new offscreen resolve image view
+		// This is important because the old descriptor sets might still reference the destroyed image views
+		//UpdateDescriptorSetsForOffscreenResources();
+	}
+
+	VkRenderPass VulkanRendererAPI::CreateOffscreenRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat) {
+		VkRenderPass renderPass = VK_NULL_HANDLE;
+		
+		// Color attachment (MSAA)
+		VkAttachmentDescription colorAttachment{};
+		colorAttachment.format = imageFormat;
+		colorAttachment.samples = msaaSamples;
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		// Resolve attachment (single-sampled, for ImGui texture)
+		VkAttachmentDescription colorAttachmentResolve{};
+		colorAttachmentResolve.format = imageFormat;
+		colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Correct layout for ImGui texture
+
+		// Depth attachment
+		VkAttachmentDescription depthAttachment{};
+		depthAttachment.format = m_VulkanSwapChain->findDepthFormat();
+		depthAttachment.samples = msaaSamples;
+		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		// Attachment references
+		VkAttachmentReference colorAttachmentRef{};
+		colorAttachmentRef.attachment = 0;
+		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkAttachmentReference colorAttachmentResolveRef{};
+		colorAttachmentResolveRef.attachment = 2;
+		colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkAttachmentReference depthAttachmentRef{};
+		depthAttachmentRef.attachment = 1;
+		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		// Subpass
+		VkSubpassDescription subpass{};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorAttachmentRef;
+		subpass.pDepthStencilAttachment = &depthAttachmentRef;
+		subpass.pResolveAttachments = &colorAttachmentResolveRef;
+
+		// Subpass dependency
+		VkSubpassDependency dependency{};
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+		dependency.srcAccessMask = 0;
+		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+		// Create render pass
+		std::array<VkAttachmentDescription, 3> attachments = { colorAttachment, depthAttachment, colorAttachmentResolve };
+		VkRenderPassCreateInfo renderPassInfo{};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		renderPassInfo.pAttachments = attachments.data();
+		renderPassInfo.subpassCount = 1;
+		renderPassInfo.pSubpasses = &subpass;
+		renderPassInfo.dependencyCount = 1;
+		renderPassInfo.pDependencies = &dependency;
+
+		if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create offscreen render pass!");
+		}
+		
+		return renderPass;
+	}
+
+	void VulkanRendererAPI::CacheObjectLists()
+	{
+		// Clear existing cached lists
+		m_ShadowCasters.clear();
+		m_SceneObjects.clear();
+		m_LightObjects.clear();
+
+		// Categorize objects for faster iteration
+		for (auto& object : Objects) {
+			if (object.pipeline->name == "defaultPipeline") {
+				m_ShadowCasters.push_back(&object);
+				m_SceneObjects.push_back(&object);
+			}
+			else if (object.pipeline->name == "lightPipeline") {
+				m_LightObjects.push_back(&object);
+			}
+			else if (object.pipeline->name == "skyboxPipeline") {
+				m_SceneObjects.push_back(&object);
+			}
+		}
+
+		// Update shadow pass flag based on whether we have shadow casters
+		m_ShadowPassEnabled = !m_ShadowCasters.empty();
+		
+		m_SceneObjectsCached = true;
+		TKC_CORE_INFO("Cached {} shadow casters, {} scene objects, {} light objects", 
+			m_ShadowCasters.size(), m_SceneObjects.size(), m_LightObjects.size());
+	}
 }
+

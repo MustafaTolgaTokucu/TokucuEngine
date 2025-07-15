@@ -16,7 +16,7 @@ namespace Tokucu {
 		s_Instance = this;
 		m_Window = std::shared_ptr<Window>(Window::Create());
 		m_Window->SetEventCallback(BIND_EVENT_FN(OnEvent));
-		
+
 		// Create ImGui layer but don't attach it yet
 		m_ImGuiLayer = new ImGuiLayer();
 	}
@@ -58,13 +58,17 @@ namespace Tokucu {
 	{
 		// Initialize renderer first
 		Renderer::BeginScene(m_Window);
-		
+
 		// Initialize ImGui after renderer is ready
 		m_ImGuiLayer->InitializeImGui();
-		
+
 		// Now attach ImGui layer after renderer is initialized
 		PushOverlay(m_ImGuiLayer);
-		
+
+
+		// Call OnAttach on the application instance after renderer is ready
+		OnAttach();
+
 		while (m_Running)
 		{
 			Renderer::RenderScene();

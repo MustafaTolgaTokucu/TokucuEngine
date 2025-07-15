@@ -2,13 +2,10 @@
 #include "ImGuiLayer.h"
 
 #include "Tokucu/Application.h"
-#include "imgui/imgui.h"
-#include "imgui/imgui_impl_glfw.h"
-#include "imgui/imgui_impl_vulkan.h"
 #include "Tokucu/Renderer/RenderCommand.h"
-#include "Platform/Vulkan/VulkanRendererAPI.h"
 
-#include "GLFW/glfw3.h"
+#include "Platform/Vulkan/VulkanRendererAPI.h"
+#include "SceneEditor.h"
 
 namespace Tokucu {
 
@@ -25,8 +22,6 @@ namespace Tokucu {
 
 	void ImGuiLayer::OnAttach()
 	{
-		// Note: We'll delay ImGui context creation until after Vulkan is initialized
-		// This will be done in a separate function called from Application::Run()
 		TKC_CORE_INFO("ImGuiLayer attached - context will be created after Vulkan initialization");
 	}
 
@@ -50,12 +45,11 @@ namespace Tokucu {
 		TKC_CORE_INFO("ImGui context created and set successfully");
 		ImGuiIO& io = ImGui::GetIO(); (void)io;
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
-		//io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-		// Note: Docking and Viewports require additional ImGui modules
-		//io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;       // Enable Docking (requires imgui_docking.h)
-		//io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;     // Enable Multi-Viewport (requires imgui_viewport.h)
-		//io.ConfigFlags |= ImGuiConfigFlags_ViewportsNoTaskBarIcons;
-		//io.ConfigFlags |= ImGuiConfigFlags_ViewportsNoMerge;
+		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;       // Enable Docking
+
+		
+		// Disable cursor changes to prevent cursor info from showing in viewport
+		io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
 		//float fontSize = 18.0f;// *2.0f;
 		//io.Fonts->AddFontFromFileTTF("assets/fonts/opensans/OpenSans-Bold.ttf", fontSize);
@@ -63,16 +57,8 @@ namespace Tokucu {
 
 		// Setup Dear ImGui style
 		ImGui::StyleColorsDark();
-		//ImGui::StyleColorsClassic();
 
-		// When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
-		ImGuiStyle& style = ImGui::GetStyle();
-		// Note: Viewports require additional ImGui modules
-		// if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-		// {
-		//     style.WindowRounding = 0.0f;
-		//     style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-		// }
+
 
 		//SetDarkThemeColors();
 
@@ -84,26 +70,15 @@ namespace Tokucu {
 		
 		// Initialize Vulkan backend through the renderer
 		RendererAPI* renderer = RenderCommand::GetRendererAPI();
-		if (renderer) {
-			// Cast to VulkanRendererAPI and call the initialization method
-			VulkanRendererAPI* vulkanRenderer = dynamic_cast<VulkanRendererAPI*>(renderer);
-			if (vulkanRenderer) {
-				vulkanRenderer->InitializeImGuiForVulkan();
-				TKC_CORE_INFO("ImGui Vulkan backend initialized successfully");
-			} else {
-				TKC_CORE_ERROR("Failed to cast renderer to VulkanRendererAPI!");
-			}
-		} else {
-			TKC_CORE_ERROR("No renderer available for ImGui initialization!");
-		}
+		VulkanRendererAPI* vulkanRenderer = dynamic_cast<VulkanRendererAPI*>(renderer);
+		vulkanRenderer->initImGui();
+		TKC_CORE_INFO("ImGui Vulkan backend initialized successfully");
 		
 		TKC_CORE_INFO("ImGui initialization completed successfully");
 	}
 
 	void ImGuiLayer::OnDetach()
 	{
-		// Note: ImGui_ImplVulkan_Shutdown() should be called from VulkanRendererAPI::Clear()
-		// to ensure proper cleanup order
 		ImGui_ImplGlfw_Shutdown();
 		if (m_Context) {
 			ImGui::SetCurrentContext(m_Context);
@@ -112,84 +87,90 @@ namespace Tokucu {
 		}
 	}
 
-
-
-
 	void ImGuiLayer::Begin()
 	{
-		// Only proceed if ImGui context is created and set as current
-		if (m_Context != nullptr) {
-			ImGui::SetCurrentContext(m_Context);
-			
-			// Verify context is set correctly
-			if (ImGui::GetCurrentContext() != m_Context) {
-				TKC_CORE_ERROR("Failed to set ImGui context!");
-				return;
-			}
-			
-			ImGui_ImplVulkan_NewFrame();
-			ImGui_ImplGlfw_NewFrame();
-			ImGui::NewFrame();
-			//ImGuizmo::BeginFrame();
-		} else {
-			TKC_CORE_ERROR("ImGui context is null in Begin()!");
-		}
+		ImGui::SetCurrentContext(m_Context);
+		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
 	}
 
 	void ImGuiLayer::End()
 	{
-		// Only proceed if ImGui context is created and set as current
-		if (m_Context != nullptr) {
-			ImGui::SetCurrentContext(m_Context);
-			ImGuiIO& io = ImGui::GetIO();
-			Application& app = Application::Get();
-			io.DisplaySize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());
+		ImGui::SetCurrentContext(m_Context);
+		ImGuiIO& io = ImGui::GetIO();
+		Application& app = Application::Get();
+		io.DisplaySize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());
 
-			// Rendering
-			ImGui::Render();
-			// Note: ImGui_ImplVulkan_RenderDrawData will be called from VulkanRendererAPI
-			// with the appropriate command buffer
-
-			// For Vulkan, we don't need the OpenGL-style context switching
-			// Multi-viewport support for Vulkan is handled differently
-			// Note: Viewports require additional ImGui modules
-			//if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-			//{
-			//    ImGui::UpdatePlatformWindows();
-			//    ImGui::RenderPlatformWindowsDefault();
-			//}
-		}
+		// Rendering
+		ImGui::Render();
 	}
 
 	void ImGuiLayer::OnImGuiRender()
 	{
-		// Only proceed if ImGui context is created and set as current
-		if (m_Context != nullptr) {
-			ImGui::SetCurrentContext(m_Context);
-			
-			// Verify context is set correctly
-			if (ImGui::GetCurrentContext() != m_Context) {
-				TKC_CORE_ERROR("Failed to set ImGui context in OnImGuiRender()!");
+		ImGui::SetCurrentContext(m_Context);
+
+			// Find SceneEditor layer
+			SceneEditor* sceneEditor = nullptr;
+			auto& layerStack = Application::Get().m_LayerStack;
+			for (auto it = layerStack.begin(); it != layerStack.end(); ++it) {
+				sceneEditor = dynamic_cast<SceneEditor*>(*it);
+				if (sceneEditor) break;
+			}
+			if (!sceneEditor) {
+				ImGui::Text("SceneEditor layer not found!");
 				return;
 			}
+
+			// Panel visibility state (static so it persists)
+			static bool showViewport = true;
+
+			// Main DockSpace that fills the entire window
+			ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+			const ImGuiViewport* viewport = ImGui::GetMainViewport();
+			Application& app = Application::Get();
+			ImVec2 windowSize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());
 			
-			static bool show = true;
-			ImGui::ShowDemoWindow(&show);
+			// Ensure valid window size
+			if (windowSize.x <= 0) windowSize.x = 1280.0f;
+			if (windowSize.y <= 0) windowSize.y = 720.0f;
 			
-			// Simple test window
-			ImGui::Begin("Tokucu Engine Debug");
-			ImGui::Text("Vulkan ImGui Integration Test");
-			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-			ImGui::End();
-		} else {
-			TKC_CORE_ERROR("ImGui context is null in OnImGuiRender()!");
-		}
+			ImGui::SetNextWindowPos(viewport->WorkPos);
+			ImGui::SetNextWindowSize(viewport->WorkSize);
+			//ImGui::SetNextWindowViewport(viewport->ID);
+			window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+			window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+			ImGui::Begin("DockSpace_Main", nullptr, window_flags);
+			ImGui::PopStyleVar(2);
+			ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+			ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+
+			// Menu bar for reopening closed windows
+			if (ImGui::BeginMenuBar()) {
+				if (ImGui::BeginMenu("Window")) {
+					ImGui::MenuItem("Viewport", nullptr, &showViewport);
+					ImGui::EndMenu();
+				}
+				ImGui::EndMenuBar();
+			}
+
+			// Create the viewport that fills the entire dockspace
+			if (showViewport) {
+				// Force the viewport to fill the entire dockspace
+				ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
+				ImGui::Begin("Viewport", &showViewport,
+					ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoNavFocus);
+				// Set the flag to allow SceneEditor to render
+				sceneEditor->SetRenderFromImGuiLayer(true);
+				sceneEditor->OnImGuiRender();
+				sceneEditor->SetRenderFromImGuiLayer(false);
+				ImGui::End();
+			}
+
+
+
+			ImGui::End(); // DockSpace_Main
 	}
-
-
-
-	
-
-	
-
 }

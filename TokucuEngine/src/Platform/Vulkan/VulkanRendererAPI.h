@@ -3,6 +3,10 @@
 #include "VulkanCore.h"
 #include <fstream>
 
+// ImGui includes
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_vulkan.h"
+
 //libs attached while vulkan implementation
 #include <variant>
 
@@ -14,7 +18,7 @@ namespace Tokucu {
 	class VulkanBuffer;
 	class VulkanFramebuffer;
 	class VulkanRenderPass;
-	
+
 
 	class VulkanRendererAPI : public RendererAPI
 	{
@@ -26,9 +30,84 @@ namespace Tokucu {
 		virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray);
 		virtual void Render();
 		virtual void Resize(const std::shared_ptr<Window>& window);
+		//void ResizeViewportFramebuffer(uint32_t width, uint32_t height);
+
+		void initImGui();
+
+		// Public methods to access scene data for ImGui
+		//std::unordered_map<std::string, glm::mat4>* GetObjectTransformations() { return &objectTransformations; }
+		//std::unordered_map<std::string, glm::vec3>* GetObjectColors() { return &objectColor; }
+		//std::vector<LightAttributes>* GetPointLights() { return &pointLights; }
+		//std::vector<VulkanObject>* GetObjects() { return &Objects; }
+		//std::vector<std::string> GetAvailableTextures();
+
+		// SceneEditor integration
+		//void SetSceneEditorModified(bool modified) { m_SceneEditorModified = modified; }
+		//bool IsSceneEditorModified() const { return m_SceneEditorModified; }
+		//void MarkObjectAsModified(const std::string& objectName) { m_ModifiedObjects[objectName] = true; }
 		
-		// Public method to initialize ImGui (called by ImGuiLayer)
-		void InitializeImGuiForVulkan();
+		// Viewport texture integration
+		//const std::vector<VkImageView>& GetSwapChainImageViews() const;
+		VkSampler GetTextureSampler() const { return textureSampler; }
+		VkImageView GetImGuiTextureView() const { return m_OffscreenResolveImageView; }
+
+		// Offscreen rendering for ImGui viewport
+		void CreateOffscreenResources();
+		
+		// Create offscreen render pass with correct final layout for ImGui
+		VkRenderPass CreateOffscreenRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat);
+		
+		// Notify when offscreen resources are recreated
+		//void NotifyOffscreenResourcesRecreated();
+		
+		// Update descriptor sets for offscreen resources
+		//void UpdateDescriptorSetsForOffscreenResources();
+		
+		// Check if offscreen resources need to be recreated
+		//bool NeedsOffscreenResourceRecreation() const { return !m_OffscreenResourcesCreated; }
+		
+		// Performance optimization: Cache object lists for faster iteration
+		void CacheObjectLists();
+		
+		// Offscreen rendering for ImGui viewport
+		VkImage m_OffscreenImage = VK_NULL_HANDLE;
+		VkDeviceMemory m_OffscreenImageMemory = VK_NULL_HANDLE;
+		VkImageView m_OffscreenImageView = VK_NULL_HANDLE;
+		VkFramebuffer m_OffscreenFramebuffer = VK_NULL_HANDLE;
+		VkRenderPass m_OffscreenRenderPass = VK_NULL_HANDLE;
+		VkSampler m_OffscreenSampler = VK_NULL_HANDLE;
+		VkExtent2D m_OffscreenExtent = {};
+		VkFormat m_OffscreenFormat = VK_FORMAT_UNDEFINED;
+		
+		// --- BEGIN: Offscreen MSAA/Resolve/Depth for ImGui Viewport ---
+		VkImage m_OffscreenColorImage = VK_NULL_HANDLE;
+		VkDeviceMemory m_OffscreenColorImageMemory = VK_NULL_HANDLE;
+		VkImageView m_OffscreenColorImageView = VK_NULL_HANDLE;
+
+		VkImage m_OffscreenResolveImage = VK_NULL_HANDLE;
+		VkDeviceMemory m_OffscreenResolveImageMemory = VK_NULL_HANDLE;
+		VkImageView m_OffscreenResolveImageView = VK_NULL_HANDLE;
+
+		VkImage m_OffscreenDepthImage = VK_NULL_HANDLE;
+		VkDeviceMemory m_OffscreenDepthImageMemory = VK_NULL_HANDLE;
+		VkImageView m_OffscreenDepthImageView = VK_NULL_HANDLE;
+		// --- END: Offscreen MSAA/Resolve/Depth for ImGui Viewport ---
+
+		// ImGui Vulkan resources
+		VkDescriptorPool imGuiDescriptorPool = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_ImGuiDescriptorSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSet m_ImGuiDescriptorSet = VK_NULL_HANDLE;
+		VkSampler m_ImGuiSampler = VK_NULL_HANDLE;
+		ImTextureID m_ImGuiTextureId = 0;
+		bool imGuiInitialized = false;
+		bool m_OffscreenResourcesCreated = false; // Track if offscreen resources have been created
+		
+		// Public method to get ImGui texture ID
+		ImTextureID GetImGuiTextureId() const { return m_ImGuiTextureId; };
+		
+		// Method to register texture with ImGui (call after ImGui is fully initialized)
+		//void RegisterImGuiTexture();
+
 	private:
 		////////////////////////////////////
 		////VULKAN INITIALIZERS (TEMPORARY)
@@ -43,7 +122,7 @@ namespace Tokucu {
 		void createTextureSampler();
 
 		void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, uint32_t currentImage);
-		
+
 		void createUniformBuffers();
 		void updateUniformBuffer(uint32_t currentImage);
 		void createDescriptorPool();
@@ -56,9 +135,12 @@ namespace Tokucu {
 		void createObject();
 		void createModel(std::string modelName, std::string modelLocation, std::string textureLocation);
 		void createShadowFramebuffer();
-		
+
+		// Offscreen render pass creation
+	
+
 		// ImGui Vulkan integration
-		void initImGui();
+		
 		////////////////////////////////////////////
 		/////VULKAN CLASS MEMBERS
 		////////////////////////////////////////////
@@ -73,19 +155,19 @@ namespace Tokucu {
 		VkQueue graphicsQueue = VK_NULL_HANDLE;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		VkQueue presentQueue = VK_NULL_HANDLE;
-		
+
 		VkRenderPass swapRenderPass = VK_NULL_HANDLE;
 		VkRenderPass shadowRenderPass = VK_NULL_HANDLE;
 		VkRenderPass renderPassHDR = VK_NULL_HANDLE;
 		VkRenderPass BRDFRenderPass = VK_NULL_HANDLE;
-		
+
 		// Shadow and IBL framebuffers
 		VkFramebuffer shadowFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer HDRCubeFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer CubeConvolutionFrameBuffer = VK_NULL_HANDLE;
 		VkFramebuffer BRDFFrameBuffer = VK_NULL_HANDLE;
 		std::vector<VkFramebuffer> prefilterMapFramebuffers;
-		
+
 		std::vector<Vertex> vertices = {};
 		std::vector<uint32_t> indices = {};
 
@@ -96,7 +178,7 @@ namespace Tokucu {
 		//added to ECS
 		std::vector<Vertex> cubeVertices;
 		std::vector<uint32_t> cubeIndices;
-		
+
 
 		std::unordered_map<std::string, glm::mat4> objectTransformations; //Holding transformation information for each object
 		std::unordered_map<std::string, glm::vec3> objectColor;
@@ -161,8 +243,12 @@ namespace Tokucu {
 		VkDescriptorBufferInfo cubemapPosMatInfo{};
 		VkDescriptorBufferInfo prefilterPosInfo{};
 
+		// SceneEditor integration
+		bool m_SceneEditorModified = false;
+		std::unordered_map<std::string, bool> m_ModifiedObjects; // Track which objects have been modified by SceneEditor
+
 		GLFWwindow* glfwWindow = nullptr;
-		
+
 		int MAX_FRAMES_IN_FLIGHT = 2;
 		uint32_t currentFrame = 0;
 		bool framebufferResized = false;
@@ -176,6 +262,14 @@ namespace Tokucu {
 		uint32_t prefilterMapResolution = 128;
 		uint32_t resizeMipLevels = 1;
 
+		// Performance optimization flags
+		bool m_ShadowPassEnabled = true;  // Can be disabled if no shadow casters
+		bool m_IBLPreprocessingComplete = false;  // Track if IBL preprocessing is done
+		bool m_SceneObjectsCached = false;  // Cache scene object lists for faster iteration
+		std::vector<VulkanObject*> m_ShadowCasters;  // Cached list of objects that cast shadows
+		std::vector<VulkanObject*> m_SceneObjects;   // Cached list of scene objects
+		std::vector<VulkanObject*> m_LightObjects;   // Cached list of light objects
+
 
 		//ABSTRACTION TEST MEMBERS
 		std::unique_ptr<VulkanCore> m_VulkanCore;
@@ -185,11 +279,11 @@ namespace Tokucu {
 		std::unique_ptr<VulkanBuffer> m_VulkanBuffer;
 		std::unique_ptr<VulkanFramebuffer> m_VulkanFramebuffer;
 		std::unique_ptr<VulkanRenderPass> m_VulkanRenderPass;
+
 		
-		// ImGui Vulkan resources
-		VkDescriptorPool imGuiDescriptorPool = VK_NULL_HANDLE;
-		bool imGuiInitialized = false;
+
+		
+		
 	};
 
 }
-

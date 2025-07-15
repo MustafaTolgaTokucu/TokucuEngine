@@ -16,13 +16,13 @@ namespace Tokucu
 			if (device != VK_NULL_HANDLE) {
 				vkDeviceWaitIdle(device);
 			}
-			
+
 			// Free command buffers first
 			if (!commandBuffers.empty() && commandPool != VK_NULL_HANDLE && device != VK_NULL_HANDLE) {
 				vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
 				commandBuffers.clear();
 			}
-			
+
 			// Then destroy command pool
 			if (commandPool != VK_NULL_HANDLE && device != VK_NULL_HANDLE) {
 				vkDestroyCommandPool(device, commandPool, nullptr);
@@ -61,5 +61,3 @@ namespace Tokucu
 
 	};
 }
-
-
