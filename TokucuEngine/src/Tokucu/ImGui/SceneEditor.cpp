@@ -7,6 +7,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <algorithm>
 #include "Platform/Vulkan/VulkanRendererAPI.h"
+#include <cstring>
 #include "Tokucu/Renderer/Camera.h"
 #include "Tokucu/Renderer/RenderCommand.h"
 

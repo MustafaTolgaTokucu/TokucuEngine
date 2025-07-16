@@ -243,7 +243,12 @@ namespace Tokucu
 				object->pipeline->descriptionBufferInfo[j].first->offset = 0;
 				object->pipeline->descriptionBufferInfo[j].first->range = object->pipeline->bufferSize[j];
 			}
-			for (size_t j = 0; j < object->pipeline->descriptionSampleInfo.size(); j++)
+			// Use the minimum of available textures and expected samplers to avoid out-of-bounds access
+			size_t textureCount = std::min(object->pipeline->descriptionSampleInfo.size(), object->texturesInfo.size());
+			TKC_CORE_INFO("Object: {} - Expected samplers: {}, Available textures: {}, Using: {}", 
+						 object->name, object->pipeline->descriptionSampleInfo.size(), 
+						 object->texturesInfo.size(), textureCount);
+			for (size_t j = 0; j < textureCount; j++)
 			{
 				auto& info = object->pipeline->descriptionSampleInfo[j];
 				info.imageLayout = object->texturesInfo[j].imageLayout;
@@ -264,7 +269,8 @@ namespace Tokucu
 				descriptorWrites.push_back(descriptorWriteBuffer);
 				binding++;
 			}
-			for (size_t j = 0; j < object->pipeline->descriptionSampleInfoCount; j++)
+			// Use the same safe count for descriptor writes to match the textures we actually have
+			for (size_t j = 0; j < textureCount; j++)
 			{
 				auto& info = object->pipeline->descriptionSampleInfo[j];
 				VkWriteDescriptorSet descriptorWriteSample{};
@@ -304,7 +310,6 @@ namespace Tokucu
 		vkCmdBindIndexBuffer(commandBuffer, object.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 		vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(object.indexData.size()), 1, 0, 0, 0);
 	}
-
 	//we need to read the shader files
 	VkShaderModule VulkanGraphicsPipeline::createShaderModule(const std::vector<char>& code) {
 		VkShaderModuleCreateInfo createInfo{};

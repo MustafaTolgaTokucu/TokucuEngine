@@ -29,6 +29,10 @@ namespace Tokucu {
 		ImTextureID m_ViewportTexture = 0;
 		bool m_ViewportTextureInitialized = false;
 		bool m_RenderFromImGuiLayer = false;
+		// Selection state for hierarchy
+		int m_SelectedObjectIndex = -1;
+		char m_TexturePathBuffer[256] = ""; // buffer for texture path input
+		std::string m_TempTextureType;
 		//
 		void InitializeViewportTexture();
 		ImVec2 m_LastViewportPanelSize = ImVec2(0, 0);

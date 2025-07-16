@@ -15,6 +15,11 @@ namespace Tokucu
 		}
 
 		VkRenderPass createRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat);
+		// Create a render pass suitable for offscreen rendering where the resolve attachment
+		// (used as the final single-sampled image that ImGui samples from) is transitioned to
+		// VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL at the end of the sub-pass so it can be
+		// bound directly in shader descriptor sets without an extra barrier.
+		VkRenderPass createOffscreenRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat);
 		VkRenderPass createShadowRenderPass();
 		VkRenderPass createHDRRenderPass();
 		VkRenderPass createBRDFRenderPass();

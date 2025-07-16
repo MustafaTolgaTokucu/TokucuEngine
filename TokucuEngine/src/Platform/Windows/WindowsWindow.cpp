@@ -11,6 +11,9 @@
 namespace Tokucu
 {
 	static bool s_GLFWInitialized = false;
+	// Tracks whether the right mouse button is currently pressed. Used to enable camera rotation
+	// only while the button is held when the cursor is visible.
+	static bool s_RightMousePressed = false;
 	
 	static void GLFWErrorCallback(int error, const char* description)
 	{
@@ -150,7 +153,14 @@ namespace Tokucu
 			camera->updateCameraVectors(yaw, pitch);
 			return;
 		}
-		
+		// In normal cursor mode, only allow camera rotation while the right mouse button is held
+		if (m_CursorEnabled && !s_RightMousePressed)
+		{
+			// Reset the firstMouse flag so that when the button is pressed again we avoid a large jump
+			firstMouse = true;
+			return;
+		}
+
 		// Normal mode - check ImGui mouse capture
 		ImGuiIO& io = ImGui::GetIO();
 		if (io.WantCaptureMouse) {
@@ -397,6 +407,15 @@ namespace Tokucu
 
 		glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* window, int button, int action, int mods)
 			{
+				// Update right mouse button state globally
+				if (button == GLFW_MOUSE_BUTTON_RIGHT)
+				{
+					if (action == GLFW_PRESS)
+						s_RightMousePressed = true;
+					else if (action == GLFW_RELEASE)
+						s_RightMousePressed = false;
+				}
+
 				// Get the window instance to check cursor state
 				WindowsWindow* instance = (WindowsWindow*)(glfwGetWindowUserPointer(window));
 				

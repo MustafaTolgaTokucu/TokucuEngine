@@ -18,6 +18,7 @@ namespace Tokucu {
 	class VulkanBuffer;
 	class VulkanFramebuffer;
 	class VulkanRenderPass;
+	class VulkanTextureManager;
 
 
 	class VulkanRendererAPI : public RendererAPI
@@ -34,28 +35,23 @@ namespace Tokucu {
 
 		void initImGui();
 
-		// Public methods to access scene data for ImGui
-		//std::unordered_map<std::string, glm::mat4>* GetObjectTransformations() { return &objectTransformations; }
-		//std::unordered_map<std::string, glm::vec3>* GetObjectColors() { return &objectColor; }
-		//std::vector<LightAttributes>* GetPointLights() { return &pointLights; }
-		//std::vector<VulkanObject>* GetObjects() { return &Objects; }
-		//std::vector<std::string> GetAvailableTextures();
+		// --- Scene Editor Helpers ---
+		// Access the list of rendered objects (modifiable)
+		std::vector<VulkanObject>& GetObjects() { return Objects; }
+		// Access transformation map so UI can read/modify it
+		std::unordered_map<std::string, glm::mat4>& GetObjectTransformations() { return objectTransformations; }
+		// Mark an object as modified so renderer skips overriding the transform each frame
+		void MarkObjectAsModified(const std::string& objectName) { m_ModifiedObjects[objectName] = true; }
+		// Update / replace a texture for a given object and material channel ("ambient", "diffuse", etc.)
+		void UpdateObjectTexture(const std::string& objectName, const std::string& textureType, const std::string& newPath);
 
-		// SceneEditor integration
-		//void SetSceneEditorModified(bool modified) { m_SceneEditorModified = modified; }
-		//bool IsSceneEditorModified() const { return m_SceneEditorModified; }
-		//void MarkObjectAsModified(const std::string& objectName) { m_ModifiedObjects[objectName] = true; }
-		
 		// Viewport texture integration
 		//const std::vector<VkImageView>& GetSwapChainImageViews() const;
 		VkSampler GetTextureSampler() const { return textureSampler; }
 		VkImageView GetImGuiTextureView() const { return m_OffscreenResolveImageView; }
 
-		// Offscreen rendering for ImGui viewport
-		void CreateOffscreenResources();
-		
-		// Create offscreen render pass with correct final layout for ImGui
-		VkRenderPass CreateOffscreenRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat);
+		// Offscreen resources creation is now handled inside existing initialisation / framebuffer code.
+		// (former CreateOffscreenResources / CreateOffscreenRenderPass removed)
 		
 		// Notify when offscreen resources are recreated
 		//void NotifyOffscreenResourcesRecreated();
@@ -279,7 +275,9 @@ namespace Tokucu {
 		std::unique_ptr<VulkanBuffer> m_VulkanBuffer;
 		std::unique_ptr<VulkanFramebuffer> m_VulkanFramebuffer;
 		std::unique_ptr<VulkanRenderPass> m_VulkanRenderPass;
+		std::unique_ptr<VulkanTextureManager> m_VulkanTextureManager;
 
+		void RefreshImGuiOffscreenTexture();
 		
 
 		

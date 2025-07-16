@@ -1,5 +1,6 @@
 #pragma once
 #include "VulkanCore.h"
+#include <mutex>
 
 namespace Tokucu
 {
@@ -12,6 +13,7 @@ namespace Tokucu
 		}
 
 		~VulkanBuffer() {
+			std::lock_guard<std::mutex> lock(s_VulkanSyncMutex);
 			// Ensure device is idle before cleanup
 			if (device != VK_NULL_HANDLE) {
 				vkDeviceWaitIdle(device);
@@ -39,7 +41,19 @@ namespace Tokucu
 
 		void generateMipmaps(VkImage image, VkFormat format, int32_t width, int32_t height, uint32_t mipLevels);
 		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectFlags, int layerCount, uint32_t mipLevels, uint32_t baseMipLevel);
+		// Lightweight variant: records the barrier into an already begun command buffer.
+		void transitionImageLayoutInCommand(
+			VkCommandBuffer commandBuffer,
+			VkImage image,
+			VkFormat format,
+			VkImageLayout oldLayout,
+			VkImageLayout newLayout,
+			VkImageAspectFlags aspectFlags,
+			int layerCount,
+			uint32_t mipLevels,
+			uint32_t baseMipLevel);
 		void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t baseArrayLayer);
+		void copyBufferToImageWithRegion(VkBuffer buffer, VkImage image, const VkBufferImageCopy& region);
 
 		void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 		VkCommandBuffer beginSingleTimeCommands();
@@ -59,5 +73,7 @@ namespace Tokucu
 		std::vector<VkCommandBuffer> commandBuffers;
 		VkQueue graphicsQueue = VK_NULL_HANDLE;
 
+		// Synchronization primitive to guard queue submissions and command pool operations across threads
+		static std::mutex s_VulkanSyncMutex;
 	};
 }

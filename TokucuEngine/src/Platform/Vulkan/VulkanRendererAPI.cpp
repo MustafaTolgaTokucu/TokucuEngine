@@ -1,4 +1,6 @@
 #include "tkcpch.h"
+#include <cstddef>
+
 #include "VulkanRendererAPI.h"
 
 #include <set>
@@ -13,6 +15,7 @@
 #include "VulkanRenderPass.h"
 #include "VulkanGraphicsPipeline.h"
 #include "VulkanBuffer.h"
+#include "VulkanTextureManager.h"
 
 // ImGui Vulkan integration
 //#include "imgui/imgui_impl_vulkan.h"
@@ -116,8 +119,10 @@ namespace Tokucu {
 		m_VulkanFramebuffer = std::make_unique<VulkanFramebuffer>(device);
 		m_VulkanSwapChain = std::make_unique<VulkanSwapChain>(m_VulkanCore.get(), m_VulkanFramebuffer.get(), physicalDevice, device, surface);
 		m_VulkanRenderPass = std::make_unique<VulkanRenderPass>(device, physicalDevice);
+		m_VulkanTextureManager = std::make_unique<VulkanTextureManager>(device, physicalDevice, m_VulkanCreateImage.get(), m_VulkanBuffer.get());
 
 		m_VulkanBuffer->createCommandPool(); // <-- Move this up before any image transitions
+		m_VulkanTextureManager->Initialize(); // Initialize texture manager after command pool
 
 		createRenderPass();
 		registerPipeline();
@@ -128,6 +133,10 @@ namespace Tokucu {
 
 		createTextureSampler();
 		createTextureImage();
+
+		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 		createUniformBuffers();
 
@@ -140,18 +149,7 @@ namespace Tokucu {
 		// Cache object lists for performance optimization
 		CacheObjectLists();
 		
-		// Create offscreen resources immediately after Vulkan initialization
-		CreateOffscreenResources();
-		
-		// Verify offscreen resources were created successfully
-		if (m_OffscreenResolveImageView == VK_NULL_HANDLE) {
-			TKC_CORE_ERROR("Failed to create offscreen resources during initialization!");
-			throw std::runtime_error("Offscreen resources creation failed!");
-		}
-		TKC_CORE_INFO("Offscreen resources created successfully during initialization");
-		
-		// ImGui will be initialized by ImGuiLayer after renderer is ready
-		// Note: Offscreen resources are now created during initialization
+		// Offscreen resources are now created inside createShadowFramebuffer()
 	}
 	void VulkanRendererAPI::SetClearColor(const glm::vec4& color)
 	{
@@ -240,6 +238,32 @@ namespace Tokucu {
 			destroyImageViewSafe(textureView);
 		}
 		textureImagesView.clear();
+
+		// --- NEW: Off-screen / ImGui viewport resources ---
+		destroyImageViewSafe(m_OffscreenColorImageView);
+		destroyImageSafe(m_OffscreenColorImage, m_OffscreenColorImageMemory);
+		destroyImageViewSafe(m_OffscreenResolveImageView);
+		destroyImageSafe(m_OffscreenResolveImage, m_OffscreenResolveImageMemory);
+		destroyImageViewSafe(m_OffscreenDepthImageView);
+		destroyImageSafe(m_OffscreenDepthImage, m_OffscreenDepthImageMemory);
+
+		if (m_OffscreenFramebuffer != VK_NULL_HANDLE) {
+			vkDestroyFramebuffer(device, m_OffscreenFramebuffer, nullptr);
+			m_OffscreenFramebuffer = VK_NULL_HANDLE;
+		}
+		if (m_OffscreenRenderPass != VK_NULL_HANDLE) {
+			vkDestroyRenderPass(device, m_OffscreenRenderPass, nullptr);
+			m_OffscreenRenderPass = VK_NULL_HANDLE;
+		}
+		if (m_OffscreenSampler != VK_NULL_HANDLE) {
+			vkDestroySampler(device, m_OffscreenSampler, nullptr);
+			m_OffscreenSampler = VK_NULL_HANDLE;
+		}
+
+		// Compatibility with legacy offscreen variables (if ever initialised)
+		destroyImageViewSafe(m_OffscreenImageView);
+		destroyImageSafe(m_OffscreenImage, m_OffscreenImageMemory);
+		// --- END NEW ---
 
 		// Framebuffers
 		vkDestroyFramebuffer(device, shadowFrameBuffer, nullptr); shadowFrameBuffer = VK_NULL_HANDLE;
@@ -332,11 +356,7 @@ namespace Tokucu {
 
 
 		// Reset smart pointers for Vulkan objects (calls destructors)
-		// Order matters: destroy VulkanBuffer first to clean up command pool and buffers
-		m_VulkanBuffer.reset();
-		m_VulkanSwapChain.reset();
-		m_VulkanGraphicsPipeline.reset();
-		m_VulkanCore.reset();
+		// (Smart pointer resets were moved earlier to ensure dependent resources are cleaned up before the device is destroyed.)
 
 		// Clear all device references after all Vulkan objects are destroyed
 		device = VK_NULL_HANDLE;
@@ -362,8 +382,7 @@ namespace Tokucu {
 
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 			m_VulkanSwapChain->recreateSwapChain();
-			// Reset offscreen resources flag to force recreation
-			m_OffscreenResourcesCreated = false;
+			createShadowFramebuffer();
 			return;
 		}
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -415,8 +434,7 @@ namespace Tokucu {
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
 			framebufferResized = false;
 			m_VulkanSwapChain->recreateSwapChain();
-			// Reset offscreen resources flag to force recreation
-			m_OffscreenResourcesCreated = false;
+			createShadowFramebuffer();
 		}
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
@@ -464,23 +482,23 @@ namespace Tokucu {
 
 		// Create descriptor pool for ImGui with more comprehensive sizes
 		VkDescriptorPoolSize pool_sizes[] = {
-			{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
-			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
-			{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
-			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
-			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
-			{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+			{ VK_DESCRIPTOR_TYPE_SAMPLER, 100 },
+			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 },
+			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 100 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 100 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 100 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 100 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 100 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 100 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 100 },
+			{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 100 }
 		};
 
 		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 		poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-		poolInfo.maxSets = 1000 * 11; // 11 is the size of pool_sizes array
+		poolInfo.maxSets = 100 * 11;  // 11 is the size of pool_sizes array
 		poolInfo.poolSizeCount = 11; // 11 is the size of pool_sizes array
 		poolInfo.pPoolSizes = pool_sizes;
 
@@ -790,6 +808,86 @@ namespace Tokucu {
 		BRDFImageView = m_VulkanCreateImage->createImageView(BRDFImage, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
 
 		BRDFFrameBuffer = m_VulkanFramebuffer->createFramebuffers(BRDFRenderPass, { BRDFImageView }, 512, 512, 1);
+
+		/*******************************
+		 * Off-screen framebuffer (ImGui)
+		 ******************************/
+		// Clean up any previous off-screen resources first
+		auto safeDestroyImage = [&](VkImage& img, VkDeviceMemory& mem) {
+			if (img != VK_NULL_HANDLE) {
+				vkDestroyImage(device, img, nullptr);
+				img = VK_NULL_HANDLE;
+			}
+			if (mem != VK_NULL_HANDLE) {
+				vkFreeMemory(device, mem, nullptr);
+				mem = VK_NULL_HANDLE;
+			}
+		};
+		auto safeDestroyImageView = [&](VkImageView& view) {
+			if (view != VK_NULL_HANDLE) {
+				vkDestroyImageView(device, view, nullptr);
+				view = VK_NULL_HANDLE;
+			}
+		};
+		if (m_OffscreenFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, m_OffscreenFramebuffer, nullptr);
+		if (m_OffscreenRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(device, m_OffscreenRenderPass, nullptr);
+		safeDestroyImageView(m_OffscreenColorImageView);
+		safeDestroyImageView(m_OffscreenResolveImageView);
+		safeDestroyImageView(m_OffscreenDepthImageView);
+		safeDestroyImage(m_OffscreenColorImage, m_OffscreenColorImageMemory);
+		safeDestroyImage(m_OffscreenResolveImage, m_OffscreenResolveImageMemory);
+		safeDestroyImage(m_OffscreenDepthImage, m_OffscreenDepthImageMemory);
+
+		// Obtain format / extent from current swap chain
+		m_OffscreenFormat = m_VulkanSwapChain->getSwapChainImageFormat();
+		m_OffscreenExtent = m_VulkanSwapChain->getSwapChainExtent();
+		VkFormat depthFormat = m_VulkanSwapChain->findDepthFormat();
+
+		if (m_OffscreenExtent.width != 0 && m_OffscreenExtent.height != 0) {
+			// Color (MSAA)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, m_OffscreenFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenColorImage, m_OffscreenColorImageMemory, 1, 0);
+			m_OffscreenColorImageView = m_VulkanCreateImage->createImageView(m_OffscreenColorImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+
+			// Resolve (single-sampled, shader-read)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, VK_SAMPLE_COUNT_1_BIT, m_OffscreenFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenResolveImage, m_OffscreenResolveImageMemory, 1, 0);
+			m_OffscreenResolveImageView = m_VulkanCreateImage->createImageView(m_OffscreenResolveImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
+
+			// Transition resolve image so first use is valid for shader read when ImGui registers it
+			m_VulkanBuffer->transitionImageLayout(m_OffscreenResolveImage, m_OffscreenFormat,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
+
+			// Depth (MSAA)
+			m_VulkanCreateImage->createImage(
+				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, depthFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				m_OffscreenDepthImage, m_OffscreenDepthImageMemory, 1, 0);
+			m_OffscreenDepthImageView = m_VulkanCreateImage->createImageView(m_OffscreenDepthImage, depthFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 1);
+
+			// Render pass + framebuffer
+			m_OffscreenRenderPass = m_VulkanRenderPass->createOffscreenRenderPass(msaaSamples, m_OffscreenFormat);
+			std::vector<VkImageView> offscreenAttachments = { m_OffscreenColorImageView, m_OffscreenDepthImageView, m_OffscreenResolveImageView };
+			m_OffscreenFramebuffer = m_VulkanFramebuffer->createFramebuffers(m_OffscreenRenderPass, offscreenAttachments, m_OffscreenExtent.width, m_OffscreenExtent.height, 1);
+
+			m_OffscreenResourcesCreated = true;
+		}
+
+		// If ImGui was already initialized, refresh its descriptor to use the new resolve image
+		if (imGuiInitialized)
+		{
+			RefreshImGuiOffscreenTexture();
+		}
 	}
 
 	void VulkanRendererAPI::createObject() {
@@ -853,7 +951,7 @@ namespace Tokucu {
 		Objects.push_back(BRDFLud);
 
 		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
+		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
 		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 
 	}
@@ -862,17 +960,46 @@ namespace Tokucu {
 		std::unique_ptr<FBXLoader> loader = std::make_unique<FBXLoader>(modelLocation.c_str());
 		FBXModelData model = loader->getModelData();
 
-		std::vector<std::pair<std::string, std::string>> materialTextureLocations;
+		// Collect all texture requests for batch loading
+		std::vector<std::pair<std::string, std::string>> allTextureRequests;
+		std::vector<std::vector<std::pair<std::string, std::string>>> meshTextureRequests;
+		
+		TKC_CORE_INFO("Processing model: {} with {} meshes", modelName, model.meshes.size());
+
+		for (int i = 0; i < model.meshes.size(); i++) {
+			auto& mesh = model.meshes[i];
+			std::string materialName = mesh.materialName;
+			TKC_CORE_INFO("Processing material: {}", materialName);
+			
+			// Define texture paths for this mesh
+			std::vector<std::pair<std::string, std::string>> materialTextureLocations = {
+				{"ambient", textureLocation + materialName + "Base.png"},
+				{"diffuse", textureLocation + materialName + "Base.png"},
+				{"specular", textureLocation + materialName + "Specular.png"},
+				{"normal", textureLocation + materialName + "Normal.png"}
+			};
+			
+			// Debug logging
+			for (const auto& [type, path] : materialTextureLocations) {
+				TKC_CORE_INFO("Texture request - Type: {}, Path: {}", type, path);
+			}
+			
+			// Add to batch loading queue
+			allTextureRequests.insert(allTextureRequests.end(), materialTextureLocations.begin(), materialTextureLocations.end());
+			meshTextureRequests.push_back(materialTextureLocations);
+		}
+
+		// Batch load all textures asynchronously
+		TKC_CORE_INFO("Total texture requests: {}", allTextureRequests.size());
+		auto textureFutures = m_VulkanTextureManager->LoadTexturesBatch(allTextureRequests);
+		TKC_CORE_INFO("Total texture futures: {}", textureFutures.size());
+		
+		// Create mesh objects while textures are loading
 		for (int i = 0; i < model.meshes.size(); i++) {
 			auto& mesh = model.meshes[i];
 			BufferData vertexData = m_VulkanBuffer->createVertexBuffer(mesh.vertices);
 			BufferData indexData = m_VulkanBuffer->createIndexBuffer(mesh.indices);
 
-			std::string materialName = mesh.materialName;
-			std::cout << "Processing material: " << materialName << std::endl;
-			materialTextureLocations.clear();
-			materialTextureLocations = { {"ambient",textureLocation + materialName + "Base.png"},{"diffuse",textureLocation + materialName + "Base.png"},{"specular",textureLocation + materialName + "Specular.png"},{"normal",textureLocation + materialName + "Normal.png"} };
-			// Assign per-mesh materials
 			VulkanObject obj = {
 				modelName,
 				mesh.vertices,
@@ -881,14 +1008,62 @@ namespace Tokucu {
 				vertexData.memory,
 				indexData.buffer,
 				indexData.memory,
-				//getBindingDescription(),
-				//getAttributeDescriptions(),
 				&m_Pipeline,
 				true,
 				modelLocation,
-				materialTextureLocations // Assign per-mesh materials
+				meshTextureRequests[i]
 			};
 			Objects.push_back(obj);
+		}
+
+		// Wait for textures to load and assign them to objects
+		size_t futureIndex = 0;
+		TKC_CORE_INFO("Starting texture assignment - meshes: {}, meshTextureRequests: {}", 
+					 model.meshes.size(), meshTextureRequests.size());
+		
+		for (int i = 0; i < model.meshes.size(); i++) {
+			if (i >= meshTextureRequests.size()) {
+				TKC_CORE_ERROR("Mesh texture requests index out of bounds: {} >= {}", i, meshTextureRequests.size());
+				break;
+			}
+			
+			auto& obj = Objects[Objects.size() - model.meshes.size() + i]; // Get the objects we just added
+			
+			TKC_CORE_INFO("Assigning textures to mesh {}/{} - {} texture requests", 
+						 i + 1, model.meshes.size(), meshTextureRequests[i].size());
+			
+			for (const auto& [type, path] : meshTextureRequests[i]) {
+				if (futureIndex >= textureFutures.size()) {
+					TKC_CORE_ERROR("Texture future index out of bounds: {} >= {}", futureIndex, textureFutures.size());
+					break;
+				}
+				
+				DescriptorTextureInfo textureInfo = textureFutures[futureIndex++].get();
+				obj.texturesInfo.push_back(textureInfo);
+				
+				// Add shadow and environment maps for normal textures
+				if (type == "normal") {
+					DescriptorTextureInfo shadowInfo = { VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView };
+					obj.texturesInfo.push_back(shadowInfo);
+
+					DescriptorTextureInfo cubeConvolutionInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), CubeConvolutionImageView };
+					obj.texturesInfo.push_back(cubeConvolutionInfo);
+
+					DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView };
+					obj.texturesInfo.push_back(prefilterInfo);
+
+					DescriptorTextureInfo BRDFInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), BRDFImageView };
+					obj.texturesInfo.push_back(BRDFInfo);
+				}
+			}
+		}
+		
+		TKC_CORE_INFO("Model {} loaded with optimized texture loading", modelName);
+		
+		// Periodic cleanup of unused textures (every 10 models)
+		static int modelCount = 0;
+		if (++modelCount % 10 == 0) {
+			m_VulkanTextureManager->CleanupUnusedTextures();
 		}
 	}
 
@@ -1023,6 +1198,8 @@ namespace Tokucu {
 				continue;
 			}
 			// Create texture image for regular maps
+			// This part is now handled by VulkanTextureManager inside createModel
+			/*
 			for (const auto& [type, path] : object.textureLocations) {
 
 				std::cout << "Loading " << type << " texture: " << path << std::endl;
@@ -1124,7 +1301,7 @@ namespace Tokucu {
 				textureImagesMemory.push_back(textureImageMemory);
 
 			}
-
+			*/
 		}
 	}
 
@@ -1325,18 +1502,9 @@ namespace Tokucu {
 			m_OffscreenColorImageView != VK_NULL_HANDLE && m_OffscreenDepthImageView != VK_NULL_HANDLE && 
 			m_OffscreenResolveImageView != VK_NULL_HANDLE) {
 			
-			// Transition offscreen resolve image to color attachment layout
-			if (m_OffscreenResolveImage != VK_NULL_HANDLE && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
-				try {
-					m_VulkanBuffer->transitionImageLayout(
-						m_OffscreenResolveImage, m_OffscreenFormat,
-						VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-						VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
-				}
-				catch (const std::exception& e) {
-					TKC_CORE_ERROR("Failed to transition offscreen resolve image: {}", e.what());
-				}
-			}
+			// No per-frame layout transition needed; attachment remains SHADER_READ_ONLY_OPTIMAL
+			// and the render-pass handles the temporary COLOR_ATTACHMENT_OPTIMAL transition
+			// internally. Removing this barrier avoids validation errors and CPU overhead.
 			
 			RenderPassInfo offscreenPassInfo = m_VulkanRenderPass->createSwapChainRenderPassInfo(
 				m_OffscreenRenderPass, m_OffscreenFramebuffer, clearValues, m_OffscreenExtent);
@@ -1352,18 +1520,8 @@ namespace Tokucu {
 			}
 			vkCmdEndRenderPass(commandBuffer);
 		
-			// Transition offscreen resolve image to shader read layout for ImGui texture
-			if (m_OffscreenResolveImage != VK_NULL_HANDLE && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
-				try {
-					m_VulkanBuffer->transitionImageLayout(
-						m_OffscreenResolveImage, m_OffscreenFormat,
-						VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-						VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0);
-				}
-				catch (const std::exception& e) {
-					TKC_CORE_ERROR("Failed to transition offscreen resolve image to SHADER_READ_ONLY_OPTIMAL: {}", e.what());
-				}
-			}
+			// No explicit barrier needed here: Render pass finalLayout already transitions the resolve image
+			// to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
 		}
 
 		// === IMGUI RENDERING (Always render to swapchain) ===
@@ -1556,202 +1714,6 @@ namespace Tokucu {
 		}
 	}
 
-	void VulkanRendererAPI::CreateOffscreenResources()
-	{
-		TKC_CORE_INFO("Creating offscreen resources...");
-		
-		// Wait for device to be idle before recreating resources
-		vkDeviceWaitIdle(device);
-		
-		// Get swapchain extent and format
-		m_OffscreenFormat = m_VulkanSwapChain->getSwapChainImageFormat();
-		m_OffscreenExtent = m_VulkanSwapChain->getSwapChainExtent();
-		
-		TKC_CORE_INFO("Offscreen format: {}, extent: {}x{}", static_cast<int>(m_OffscreenFormat), m_OffscreenExtent.width, m_OffscreenExtent.height);
-		
-		// Cleanup existing offscreen resources
-		if (m_OffscreenColorImageView) vkDestroyImageView(device, m_OffscreenColorImageView, nullptr);
-		if (m_OffscreenColorImage) vkDestroyImage(device, m_OffscreenColorImage, nullptr);
-		if (m_OffscreenColorImageMemory) vkFreeMemory(device, m_OffscreenColorImageMemory, nullptr);
-
-		if (m_OffscreenResolveImageView) vkDestroyImageView(device, m_OffscreenResolveImageView, nullptr);
-		if (m_OffscreenResolveImage) vkDestroyImage(device, m_OffscreenResolveImage, nullptr);
-		if (m_OffscreenResolveImageMemory) vkFreeMemory(device, m_OffscreenResolveImageMemory, nullptr);
-
-		if (m_OffscreenDepthImageView) vkDestroyImageView(device, m_OffscreenDepthImageView, nullptr);
-		if (m_OffscreenDepthImage) vkDestroyImage(device, m_OffscreenDepthImage, nullptr);
-		if (m_OffscreenDepthImageMemory) vkFreeMemory(device, m_OffscreenDepthImageMemory, nullptr);
-
-		// Reset handles
-		m_OffscreenColorImageView = VK_NULL_HANDLE;
-		m_OffscreenColorImage = VK_NULL_HANDLE;
-		m_OffscreenColorImageMemory = VK_NULL_HANDLE;
-		m_OffscreenResolveImageView = VK_NULL_HANDLE;
-		m_OffscreenResolveImage = VK_NULL_HANDLE;
-		m_OffscreenResolveImageMemory = VK_NULL_HANDLE;
-		m_OffscreenDepthImageView = VK_NULL_HANDLE;
-		m_OffscreenDepthImage = VK_NULL_HANDLE;
-		m_OffscreenDepthImageMemory = VK_NULL_HANDLE;
-
-		// Create offscreen images
-		VkFormat depthFormat = m_VulkanSwapChain->findDepthFormat();
-		TKC_CORE_INFO("Depth format: {}", static_cast<int>(depthFormat));
-
-		if (m_OffscreenExtent.width > 0 && m_OffscreenExtent.height > 0 && m_OffscreenFormat != VK_FORMAT_UNDEFINED) {
-			TKC_CORE_INFO("Creating offscreen images...");
-			
-			// Color image (MSAA)
-			m_VulkanCreateImage->createImage(
-				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, m_OffscreenFormat,
-				VK_IMAGE_TILING_OPTIMAL,
-				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				m_OffscreenColorImage, m_OffscreenColorImageMemory, 1, 0);
-			m_OffscreenColorImageView = m_VulkanCreateImage->createImageView(
-				m_OffscreenColorImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
-			TKC_CORE_INFO("Color image created: {}, view: {}", (ImU64)m_OffscreenColorImage, (ImU64)m_OffscreenColorImageView);
-
-			// Resolve image (single-sampled, for ImGui)
-			m_VulkanCreateImage->createImage(
-				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, VK_SAMPLE_COUNT_1_BIT, m_OffscreenFormat,
-				VK_IMAGE_TILING_OPTIMAL,
-				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				m_OffscreenResolveImage, m_OffscreenResolveImageMemory, 1, 0);
-			m_OffscreenResolveImageView = m_VulkanCreateImage->createImageView(
-				m_OffscreenResolveImage, m_OffscreenFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0, 1);
-			TKC_CORE_INFO("Resolve image created: {}, view: {}", (ImU64)m_OffscreenResolveImage, (ImU64)m_OffscreenResolveImageView);
-
-			// Note: The image starts in UNDEFINED layout and will be transitioned to COLOR_ATTACHMENT_OPTIMAL
-			// when needed in the command buffer recording
-
-			// Depth image (MSAA)
-			m_VulkanCreateImage->createImage(
-				m_OffscreenExtent.width, m_OffscreenExtent.height, 1, msaaSamples, depthFormat,
-				VK_IMAGE_TILING_OPTIMAL,
-				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				m_OffscreenDepthImage, m_OffscreenDepthImageMemory, 1, 0);
-			m_OffscreenDepthImageView = m_VulkanCreateImage->createImageView(
-				m_OffscreenDepthImage, depthFormat, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0, 1);
-			TKC_CORE_INFO("Depth image created: {}, view: {}", (ImU64)m_OffscreenDepthImage, (ImU64)m_OffscreenDepthImageView);
-		}
-		else {
-			TKC_CORE_ERROR("Invalid offscreen extent or format - width: {}, height: {}, format: {}", 
-				m_OffscreenExtent.width, m_OffscreenExtent.height, static_cast<int>(m_OffscreenFormat));
-		}
-
-		// Create offscreen render pass and framebuffer
-		// We need a custom render pass for offscreen that sets the correct final layout
-		m_OffscreenRenderPass = CreateOffscreenRenderPass(msaaSamples, m_OffscreenFormat);
-		TKC_CORE_INFO("Offscreen render pass created: {}", (ImU64)m_OffscreenRenderPass);
-
-		if (m_OffscreenColorImageView != VK_NULL_HANDLE && m_OffscreenDepthImageView != VK_NULL_HANDLE && m_OffscreenResolveImageView != VK_NULL_HANDLE) {
-			std::vector<VkImageView> attachments = {
-				m_OffscreenColorImageView, m_OffscreenDepthImageView, m_OffscreenResolveImageView
-			};
-			m_OffscreenFramebuffer = m_VulkanFramebuffer->createFramebuffers(
-				m_OffscreenRenderPass, attachments, m_OffscreenExtent.width, m_OffscreenExtent.height, 1);
-			TKC_CORE_INFO("Offscreen framebuffer created: {}", (ImU64)m_OffscreenFramebuffer);
-		}
-		else {
-					TKC_CORE_ERROR("Failed to create offscreen framebuffer - color view: {}, depth view: {}, resolve view: {}", 
-			(ImU64)m_OffscreenColorImageView, (ImU64)m_OffscreenDepthImageView, (ImU64)m_OffscreenResolveImageView);
-		}
-		
-		// Mark offscreen resources as created first
-		m_OffscreenResourcesCreated = true;
-		TKC_CORE_INFO("Offscreen resources creation completed");
-		
-		// Update descriptor sets to use the new offscreen resolve image view
-		// This is important because the old descriptor sets might still reference the destroyed image views
-		//UpdateDescriptorSetsForOffscreenResources();
-	}
-
-	VkRenderPass VulkanRendererAPI::CreateOffscreenRenderPass(VkSampleCountFlagBits msaaSamples, VkFormat imageFormat) {
-		VkRenderPass renderPass = VK_NULL_HANDLE;
-		
-		// Color attachment (MSAA)
-		VkAttachmentDescription colorAttachment{};
-		colorAttachment.format = imageFormat;
-		colorAttachment.samples = msaaSamples;
-		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-		// Resolve attachment (single-sampled, for ImGui texture)
-		VkAttachmentDescription colorAttachmentResolve{};
-		colorAttachmentResolve.format = imageFormat;
-		colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
-		colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Correct layout for ImGui texture
-
-		// Depth attachment
-		VkAttachmentDescription depthAttachment{};
-		depthAttachment.format = m_VulkanSwapChain->findDepthFormat();
-		depthAttachment.samples = msaaSamples;
-		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-		// Attachment references
-		VkAttachmentReference colorAttachmentRef{};
-		colorAttachmentRef.attachment = 0;
-		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-		VkAttachmentReference colorAttachmentResolveRef{};
-		colorAttachmentResolveRef.attachment = 2;
-		colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-		VkAttachmentReference depthAttachmentRef{};
-		depthAttachmentRef.attachment = 1;
-		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-		// Subpass
-		VkSubpassDescription subpass{};
-		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass.colorAttachmentCount = 1;
-		subpass.pColorAttachments = &colorAttachmentRef;
-		subpass.pDepthStencilAttachment = &depthAttachmentRef;
-		subpass.pResolveAttachments = &colorAttachmentResolveRef;
-
-		// Subpass dependency
-		VkSubpassDependency dependency{};
-		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-		dependency.dstSubpass = 0;
-		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-		dependency.srcAccessMask = 0;
-		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-		// Create render pass
-		std::array<VkAttachmentDescription, 3> attachments = { colorAttachment, depthAttachment, colorAttachmentResolve };
-		VkRenderPassCreateInfo renderPassInfo{};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-		renderPassInfo.pAttachments = attachments.data();
-		renderPassInfo.subpassCount = 1;
-		renderPassInfo.pSubpasses = &subpass;
-		renderPassInfo.dependencyCount = 1;
-		renderPassInfo.pDependencies = &dependency;
-
-		if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create offscreen render pass!");
-		}
-		
-		return renderPass;
-	}
-
 	void VulkanRendererAPI::CacheObjectLists()
 	{
 		// Clear existing cached lists
@@ -1780,5 +1742,88 @@ namespace Tokucu {
 		TKC_CORE_INFO("Cached {} shadow casters, {} scene objects, {} light objects", 
 			m_ShadowCasters.size(), m_SceneObjects.size(), m_LightObjects.size());
 	}
+
+	void VulkanRendererAPI::RefreshImGuiOffscreenTexture()
+	{
+		if (m_ImGuiDescriptorSet == VK_NULL_HANDLE)
+			return;
+
+		VkDescriptorImageInfo imageInfo{};
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		imageInfo.imageView = m_OffscreenResolveImageView;
+		imageInfo.sampler = m_ImGuiSampler != VK_NULL_HANDLE ? m_ImGuiSampler : m_OffscreenSampler;
+
+		VkWriteDescriptorSet write{};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = m_ImGuiDescriptorSet;
+		write.dstBinding = 0;
+		write.dstArrayElement = 0;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		write.descriptorCount = 1;
+		write.pImageInfo = &imageInfo;
+
+		vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+		// Update ImGui texture ID used in UI code
+		m_ImGuiTextureId = (ImTextureID)m_ImGuiDescriptorSet;
+	}
+
+    /*
+     * Replace a texture for a given object/material channel at runtime. This is a convenience helper
+     * for the SceneEditor panel. For simplicity we:
+     * 1) Load the new texture via VulkanTextureManager (async, but we wait immediately).
+     * 2) Replace the corresponding DescriptorTextureInfo in the object's texturesInfo vector.
+     * 3) Re-create (or update) the descriptor sets for that object so the shader sees the new image.
+     *
+     * NOTE: This naive implementation re-allocates descriptor sets which is fine for editor usage.
+     */
+    void VulkanRendererAPI::UpdateObjectTexture(const std::string& objectName, const std::string& textureType, const std::string& newPath)
+    {
+        // Find the object
+        VulkanObject* targetObj = nullptr;
+        for (auto& obj : Objects) {
+            if (obj.name == objectName) { targetObj = &obj; break; }
+        }
+        if (!targetObj) {
+            TKC_CORE_WARN("UpdateObjectTexture: object '{}' not found", objectName);
+            return;
+        }
+
+        // Request the texture load (blocking for now)
+        std::vector<std::pair<std::string, std::string>> req = { {textureType, newPath} };
+        auto futures = m_VulkanTextureManager->LoadTexturesBatch(req);
+        DescriptorTextureInfo newInfo = futures[0].get();
+
+        // Replace existing entry or append
+        size_t replaceIndex = SIZE_MAX;
+        for (size_t i = 0; i < targetObj->textureLocations.size(); ++i) {
+            if (targetObj->textureLocations[i].first == textureType) { replaceIndex = i; break; }
+        }
+
+        if (replaceIndex == SIZE_MAX) {
+            // Not found – append new mapping
+            targetObj->textureLocations.push_back({textureType, newPath});
+            targetObj->texturesInfo.push_back(newInfo);
+        } else {
+            targetObj->textureLocations[replaceIndex].second = newPath;
+            // texturesInfo may not be 1-1 after the normal texture (extra textures for PBR)
+            // If index within bounds, replace; otherwise append.
+            if (replaceIndex < targetObj->texturesInfo.size())
+                targetObj->texturesInfo[replaceIndex] = newInfo;
+            else
+                targetObj->texturesInfo.push_back(newInfo);
+        }
+
+        // Re-create / update descriptor sets for this object so the new image is visible
+        try {
+            m_VulkanGraphicsPipeline->createDescriptorSets(targetObj);
+            TKC_CORE_INFO("Texture for '{}' updated (type: '{}')", objectName, textureType);
+        } catch (const std::exception& e) {
+            TKC_CORE_ERROR("Failed to recreate descriptor sets after texture update: {}", e.what());
+        }
+
+        // Mark as modified so auto-transform update doesn't overwrite external edits
+        m_ModifiedObjects[objectName] = true;
+    }
 }
 
