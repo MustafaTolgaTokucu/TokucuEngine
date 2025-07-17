@@ -94,7 +94,7 @@ void main() {
     vec3 color = ambient + Lo;
     //color =  ambient;
     //Not correct, just for better shadow visibility
-    //color *= 1.f - shadow;
+    color *= 1.f - shadow;
     color = color / (color + vec3(1.0));
 
     //color =(albedo);

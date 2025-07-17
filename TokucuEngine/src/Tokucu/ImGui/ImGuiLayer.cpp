@@ -206,8 +206,14 @@ namespace Tokucu {
 						}
 						ImGui::PopID();
 					} else {
-						// Parent node
-						bool open = ImGui::TreeNode(modelName.c_str());
+						// Parent node is selectable
+						ImGui::PushID(modelName.c_str());
+						bool parentSelected = (selectedIndex == indices[0]);
+						ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | (parentSelected ? ImGuiTreeNodeFlags_Selected : 0);
+						bool open = ImGui::TreeNodeEx("##Parent", flags, "%s", modelName.c_str());
+						if (ImGui::IsItemClicked()) {
+							selectedIndex = indices[0]; // Treat first mesh as representative
+						}
 						if (open) {
 							for (int idx : indices) {
 								ImGui::PushID(idx);
@@ -220,6 +226,7 @@ namespace Tokucu {
 							}
 							ImGui::TreePop();
 						}
+						ImGui::PopID();
 					}
 				}
 				ImGui::End();
@@ -278,6 +285,16 @@ namespace Tokucu {
 						ImGui::Text("%s", ttype.c_str());
 						ImGui::SameLine(150);
 						ImGui::TextWrapped("%s", tpath.c_str());
+						// Preview thumbnail – guard against missing textureInfo entries
+						ImTextureID prevId = 0;
+						if (ti < selObj.texturesInfo.size()) {
+							prevId = vkRenderer->GetOrCreateImGuiTexture(selObj.texturesInfo[ti].sampler, selObj.texturesInfo[ti].imageView);
+						}
+						ImGui::SameLine();
+						if (prevId)
+							ImGui::Image(prevId, ImVec2(32,32));
+						else
+							ImGui::Text("(no tex)");
 						ImGui::SameLine();
 						if (ImGui::SmallButton(("Change##" + std::to_string(ti)).c_str())) {
 							#ifdef _MSC_VER
@@ -294,12 +311,31 @@ namespace Tokucu {
 						ImGui::InputText("##NewTexPath", texPathBuf, sizeof(texPathBuf));
 						ImGui::SameLine();
 						if (ImGui::Button("Load Texture")) {
-							vkRenderer->UpdateObjectTexture(selObj.name, tempTexType, std::string(texPathBuf));
+							vkRenderer->UpdateObjectTexture(&selObj, tempTexType, std::string(texPathBuf));
 							memset(texPathBuf, 0, sizeof(texPathBuf));
 						}
 					}
 
+					ImGui::End(); // Inspector window
+
+					// ------------------- Runtime FBX Loader -------------------
+					static char modelPathBuf[256] = "";
+					static char modelTexDirBuf[256] = "";
+					ImGui::Begin("Load FBX Model");
+					ImGui::InputText("Model Path", modelPathBuf, sizeof(modelPathBuf));
+					ImGui::InputText("Textures Folder", modelTexDirBuf, sizeof(modelTexDirBuf));
+					if (ImGui::Button("Load Model")) {
+						std::string modelPathStr(modelPathBuf);
+						std::string texDirStr(modelTexDirBuf);
+						if (!modelPathStr.empty()) {
+							vkRenderer->LoadModelFromFBX(modelPathStr, texDirStr); // texDir may be empty for default textures
+							memset(modelPathBuf, 0, sizeof(modelPathBuf));
+							memset(modelTexDirBuf, 0, sizeof(modelTexDirBuf));
+						}
+					}
 					ImGui::End();
+					// ----------------------------------------------------------
+
 				}
 			}
 		}

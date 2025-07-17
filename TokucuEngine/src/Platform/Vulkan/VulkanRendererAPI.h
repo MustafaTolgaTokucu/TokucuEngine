@@ -9,6 +9,7 @@
 
 //libs attached while vulkan implementation
 #include <variant>
+#include <unordered_map>
 
 namespace Tokucu {
 	// Forward declarations
@@ -31,6 +32,10 @@ namespace Tokucu {
 		virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray);
 		virtual void Render();
 		virtual void Resize(const std::shared_ptr<Window>& window);
+		// Load an FBX model (and its textures) at runtime. The model will be added to the scene with
+		// default textures (or engine fallbacks) and can later be modified via the existing
+		// UpdateObjectTexture helpers.
+		void LoadModelFromFBX(const std::string& modelPath, const std::string& textureDir);
 		//void ResizeViewportFramebuffer(uint32_t width, uint32_t height);
 
 		void initImGui();
@@ -42,7 +47,9 @@ namespace Tokucu {
 		std::unordered_map<std::string, glm::mat4>& GetObjectTransformations() { return objectTransformations; }
 		// Mark an object as modified so renderer skips overriding the transform each frame
 		void MarkObjectAsModified(const std::string& objectName) { m_ModifiedObjects[objectName] = true; }
-		// Update / replace a texture for a given object and material channel ("ambient", "diffuse", etc.)
+		// Update / replace a texture for a given object and material channel (by object pointer)
+		void UpdateObjectTexture(VulkanObject* targetObj, const std::string& textureType, const std::string& newPath);
+		// Convenience overload: find object by name and forward to the pointer version
 		void UpdateObjectTexture(const std::string& objectName, const std::string& textureType, const std::string& newPath);
 
 		// Viewport texture integration
@@ -103,6 +110,8 @@ namespace Tokucu {
 		
 		// Method to register texture with ImGui (call after ImGui is fully initialized)
 		//void RegisterImGuiTexture();
+
+		ImTextureID GetOrCreateImGuiTexture(VkSampler sampler, VkImageView view);
 
 	private:
 		////////////////////////////////////

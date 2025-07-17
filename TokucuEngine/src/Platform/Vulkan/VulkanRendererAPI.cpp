@@ -4,6 +4,7 @@
 #include "VulkanRendererAPI.h"
 
 #include <set>
+#include <filesystem>
 
 #include "Tokucu/Renderer/Camera.h"
 #include "Tokucu/Renderer/FBXLoader.h"
@@ -903,9 +904,9 @@ namespace Tokucu {
 		//	{{"ambient","textures/Lambda.jpg"},{"diffuse","textures/Lambda.jpg"},{"specular","textures/LambdaSpecular.jpg"},{"normal","textures/defaultNormal.jpg"}} };
 		//Objects.push_back(realCube);
 
-		//VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
-		//Objects.push_back(base);
-		//
+		VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, &m_Pipeline,true,std::nullopt };
+		Objects.push_back(base);
+		
 		//VulkanObject top = { "top", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt };
 		//Objects.push_back(top);
 		//
@@ -960,106 +961,98 @@ namespace Tokucu {
 		std::unique_ptr<FBXLoader> loader = std::make_unique<FBXLoader>(modelLocation.c_str());
 		FBXModelData model = loader->getModelData();
 
-		// Collect all texture requests for batch loading
+		const bool useDefaultTextures = textureLocation.empty();
+
+		// Containers for optional asynchronous texture loading
 		std::vector<std::pair<std::string, std::string>> allTextureRequests;
 		std::vector<std::vector<std::pair<std::string, std::string>>> meshTextureRequests;
-		
+
 		TKC_CORE_INFO("Processing model: {} with {} meshes", modelName, model.meshes.size());
 
-		for (int i = 0; i < model.meshes.size(); i++) {
-			auto& mesh = model.meshes[i];
-			std::string materialName = mesh.materialName;
-			TKC_CORE_INFO("Processing material: {}", materialName);
-			
-			// Define texture paths for this mesh
-			std::vector<std::pair<std::string, std::string>> materialTextureLocations = {
-				{"ambient", textureLocation + materialName + "Base.png"},
-				{"diffuse", textureLocation + materialName + "Base.png"},
-				{"specular", textureLocation + materialName + "Specular.png"},
-				{"normal", textureLocation + materialName + "Normal.png"}
-			};
-			
-			// Debug logging
-			for (const auto& [type, path] : materialTextureLocations) {
-				TKC_CORE_INFO("Texture request - Type: {}, Path: {}", type, path);
+		// If we are NOT using default textures, prepare texture request vectors
+		if (!useDefaultTextures) {
+			for (int i = 0; i < model.meshes.size(); i++) {
+				auto& mesh = model.meshes[i];
+				std::string materialName = mesh.materialName;
+
+				std::vector<std::pair<std::string, std::string>> materialTextureLocations = {
+					{"ambient", textureLocation + materialName + "Base.png"},
+					{"diffuse", textureLocation + materialName + "Base.png"},
+					{"specular", textureLocation + materialName + "Specular.png"},
+					{"normal", textureLocation + materialName + "Normal.png"}
+				};
+
+				for (const auto& [type, path] : materialTextureLocations) {
+					TKC_CORE_INFO("Texture request - Type: {}, Path: {}", type, path);
+				}
+
+				allTextureRequests.insert(allTextureRequests.end(), materialTextureLocations.begin(), materialTextureLocations.end());
+				meshTextureRequests.push_back(materialTextureLocations);
 			}
-			
-			// Add to batch loading queue
-			allTextureRequests.insert(allTextureRequests.end(), materialTextureLocations.begin(), materialTextureLocations.end());
-			meshTextureRequests.push_back(materialTextureLocations);
 		}
 
-		// Batch load all textures asynchronously
-		TKC_CORE_INFO("Total texture requests: {}", allTextureRequests.size());
-		auto textureFutures = m_VulkanTextureManager->LoadTexturesBatch(allTextureRequests);
-		TKC_CORE_INFO("Total texture futures: {}", textureFutures.size());
-		
-		// Create mesh objects while textures are loading
+		// Start asynchronous loading if needed
+		std::vector<std::shared_future<DescriptorTextureInfo>> textureFutures;
+		if (!useDefaultTextures && !allTextureRequests.empty()) {
+			TKC_CORE_INFO("Total texture requests: {}", allTextureRequests.size());
+			textureFutures = m_VulkanTextureManager->LoadTexturesBatch(allTextureRequests);
+			TKC_CORE_INFO("Total texture futures: {}", textureFutures.size());
+		}
+
+		// Create mesh objects
+		size_t futureIndex = 0;
 		for (int i = 0; i < model.meshes.size(); i++) {
 			auto& mesh = model.meshes[i];
 			BufferData vertexData = m_VulkanBuffer->createVertexBuffer(mesh.vertices);
 			BufferData indexData = m_VulkanBuffer->createIndexBuffer(mesh.indices);
 
-			VulkanObject obj = {
-				modelName,
-				mesh.vertices,
-				mesh.indices,
-				vertexData.buffer,
-				vertexData.memory,
-				indexData.buffer,
-				indexData.memory,
-				&m_Pipeline,
-				true,
-				modelLocation,
-				meshTextureRequests[i]
-			};
+			VulkanObject obj{}; // use default initializers (includes default textures)
+			obj.name = modelName;
+			obj.vertexData = mesh.vertices;
+			obj.indexData = mesh.indices;
+			obj.vertexBuffer = vertexData.buffer;
+			obj.vertexBufferMemory = vertexData.memory;
+			obj.indexBuffer = indexData.buffer;
+			obj.indexBufferMemory = indexData.memory;
+			obj.pipeline = &m_Pipeline;
+			obj.b_PBR = true;
+			obj.modelLocation = modelLocation;
+
+			if (!useDefaultTextures) {
+				obj.textureLocations = meshTextureRequests[i];
+			}
+
 			Objects.push_back(obj);
 		}
 
-		// Wait for textures to load and assign them to objects
-		size_t futureIndex = 0;
-		TKC_CORE_INFO("Starting texture assignment - meshes: {}, meshTextureRequests: {}", 
-					 model.meshes.size(), meshTextureRequests.size());
-		
-		for (int i = 0; i < model.meshes.size(); i++) {
-			if (i >= meshTextureRequests.size()) {
-				TKC_CORE_ERROR("Mesh texture requests index out of bounds: {} >= {}", i, meshTextureRequests.size());
-				break;
-			}
-			
-			auto& obj = Objects[Objects.size() - model.meshes.size() + i]; // Get the objects we just added
-			
-			TKC_CORE_INFO("Assigning textures to mesh {}/{} - {} texture requests", 
-						 i + 1, model.meshes.size(), meshTextureRequests[i].size());
-			
-			for (const auto& [type, path] : meshTextureRequests[i]) {
-				if (futureIndex >= textureFutures.size()) {
-					TKC_CORE_ERROR("Texture future index out of bounds: {} >= {}", futureIndex, textureFutures.size());
-					break;
-				}
-				
-				DescriptorTextureInfo textureInfo = textureFutures[futureIndex++].get();
-				obj.texturesInfo.push_back(textureInfo);
-				
-				// Add shadow and environment maps for normal textures
-				if (type == "normal") {
-					DescriptorTextureInfo shadowInfo = { VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView };
-					obj.texturesInfo.push_back(shadowInfo);
+		// If we loaded custom textures, wait for futures and assign DescriptorTextureInfo
+		if (!useDefaultTextures) {
+			TKC_CORE_INFO("Assigning textures to meshes using loaded images...");
 
-					DescriptorTextureInfo cubeConvolutionInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), CubeConvolutionImageView };
-					obj.texturesInfo.push_back(cubeConvolutionInfo);
+			for (int i = 0; i < model.meshes.size(); i++) {
+				auto& obj = Objects[Objects.size() - model.meshes.size() + i];
 
-					DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView };
-					obj.texturesInfo.push_back(prefilterInfo);
+				for (const auto& [type, path] : meshTextureRequests[i]) {
+					if (futureIndex >= textureFutures.size()) {
+						TKC_CORE_ERROR("Texture future index out of bounds: {} >= {}", futureIndex, textureFutures.size());
+						break;
+					}
 
-					DescriptorTextureInfo BRDFInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), BRDFImageView };
-					obj.texturesInfo.push_back(BRDFInfo);
+					DescriptorTextureInfo textureInfo = textureFutures[futureIndex++].get();
+					obj.texturesInfo.push_back(textureInfo);
+
+					if (type == "normal") {
+						obj.texturesInfo.push_back({ VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView });
+						obj.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), CubeConvolutionImageView });
+						obj.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView });
+						obj.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), BRDFImageView });
+					}
 				}
 			}
 		}
-		
-		TKC_CORE_INFO("Model {} loaded with optimized texture loading", modelName);
-		
+
+		TKC_CORE_INFO("Model {} loaded (defaultTextures={}): {} objects now in scene", modelName, useDefaultTextures, Objects.size());
+
 		// Periodic cleanup of unused textures (every 10 models)
 		static int modelCount = 0;
 		if (++modelCount % 10 == 0) {
@@ -1089,6 +1082,16 @@ namespace Tokucu {
 			
 				
 				prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, prefilterMipLevels, 0, 6);
+
+				// Patch any previously created objects that still hold a null prefilter map
+				for (auto& prevObj : Objects) {
+					for (auto& texInfo : prevObj.texturesInfo) {
+						if (texInfo.imageView == VK_NULL_HANDLE && texInfo.sampler == prefilterTextureSampler) {
+							texInfo.imageView = prefilterMapView;
+						}
+					}
+				}
+
 				DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ,textureSampler,HDRCubeView };
 				object.texturesInfo.push_back(prefilterInfo);
 
@@ -1155,36 +1158,37 @@ namespace Tokucu {
 				std::vector<std::string> skyboxFaces = {
 					"assets/textures/skybox/right.jpg", "assets/textures/skybox/left.jpg", "assets/textures/skybox/top.jpg", "assets/textures/skybox/bottom.jpg", "assets/textures/skybox/front.jpg", "assets/textures/skybox/back.jpg"
 				};
-				for (int i = 0; i < 6; i++) {
-					// Load image
-					std::cout << "Loading skybox face: " << skyboxFaces[i] << std::endl;
-					int texWidth, texHeight, texChannels;
-					stbi_uc* pixels = stbi_load(skyboxFaces[i].c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-					VkDeviceSize imageSize = texWidth * texHeight * 4;
+				// Allocate one reusable staging buffer (largest face)
+				VkDeviceSize faceSize = texWidth * texHeight * 4; // 4 bytes per pixel (RGBA8)
+				VkBuffer stagingBuffer;
+				VkDeviceMemory stagingBufferMemory;
+				m_VulkanBuffer->createBuffer(faceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+					stagingBuffer, stagingBufferMemory);
 
+				for (int i = 0; i < 6; i++) {
+					TKC_CORE_INFO("Loading skybox face {}: {}", i, skyboxFaces[i]);
+
+					int w, h, ch;
+					stbi_uc* pixels = stbi_load(skyboxFaces[i].c_str(), &w, &h, &ch, STBI_rgb_alpha);
 					if (!pixels) {
 						throw std::runtime_error("Failed to load skybox face: " + skyboxFaces[i]);
 					}
-					// Create staging buffer
-					VkBuffer stagingBuffer;
-					VkDeviceMemory stagingBufferMemory;
-					m_VulkanBuffer->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-						stagingBuffer, stagingBufferMemory);
-					// Copy pixels to staging buffer
+
+					// Copy into the _same_ staging buffer (overwriting previous face)
 					void* data;
-					vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
-					memcpy(data, pixels, static_cast<size_t>(imageSize));
+					vkMapMemory(device, stagingBufferMemory, 0, faceSize, 0, &data);
+					memcpy(data, pixels, static_cast<size_t>(faceSize));
 					vkUnmapMemory(device, stagingBufferMemory);
 					stbi_image_free(pixels);
-					// Copy from buffer to the specific face of the cubemap
+
 					m_VulkanBuffer->copyBufferToImage(stagingBuffer, skyboxImage,
-						static_cast<uint32_t>(texWidth),
-						static_cast<uint32_t>(texHeight), i);
-					// Clean up staging resources
-					vkDestroyBuffer(device, stagingBuffer, nullptr);
-					vkFreeMemory(device, stagingBufferMemory, nullptr);
+						static_cast<uint32_t>(w), static_cast<uint32_t>(h), i);
 				}
+
+				// Clean up staging buffer once after all faces are uploaded
+				vkDestroyBuffer(device, stagingBuffer, nullptr);
+				vkFreeMemory(device, stagingBufferMemory, nullptr);
 				// After all faces are copied, transition to shader read layout
 				m_VulkanBuffer->transitionImageLayout(skyboxImage, VK_FORMAT_R8G8B8A8_SRGB,
 					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1199,109 +1203,22 @@ namespace Tokucu {
 			}
 			// Create texture image for regular maps
 			// This part is now handled by VulkanTextureManager inside createModel
-			/*
-			for (const auto& [type, path] : object.textureLocations) {
+			if (object.texturesInfo.empty() && !object.textureLocations.empty()) {
+				auto futures = m_VulkanTextureManager->LoadTexturesBatch(object.textureLocations);
+				for (size_t idx = 0; idx < futures.size(); ++idx) {
+					DescriptorTextureInfo texInfo = futures[idx].get();
+					object.texturesInfo.push_back(texInfo);
 
-				std::cout << "Loading " << type << " texture: " << path << std::endl;
-				int texWidth, texHeight, texChannels;
-				stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-				VkDeviceSize imageSize = texWidth * texHeight * 4;
-				//mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-				mipLevels = 1;
-				resizeMipLevels = mipLevels;
-
-				if (!pixels) {
-					TKC_CORE_ERROR("Failed to find correct texture image!");
-					std::string location;
-					if (type == "ambient" || type == "diffuse" || type == "specular")
-					{
-						location = "assets/textures/default.jpg";
-					}
-					else if (type == "normal")
-					{
-						location = "assets/textures/defaultNormal.jpg";
-					}
-					else
-					{
-						throw std::runtime_error("failed to load texture image!");
-					}
-					//texWidth, texHeight, texChannels = 0;
-					pixels = stbi_load(location.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-					imageSize = texWidth * texHeight * 4;
-					mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-					if (!pixels) {
-						throw std::runtime_error("failed to load texture image!");
+					// Append extra PBR helper maps right after the normal map so the
+					// descriptor bindings match the expected layout (total 8 samplers).
+					if (object.textureLocations[idx].first == "normal") {
+						object.texturesInfo.push_back({ VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView });
+						object.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), CubeConvolutionImageView });
+						object.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView });
+						object.texturesInfo.push_back({ VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_VulkanTextureManager->GetTextureSampler(), BRDFImageView });
 					}
 				}
-
-				VkBuffer stagingBuffer = VK_NULL_HANDLE;
-				VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
-				m_VulkanBuffer->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-				void* data;
-				vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
-				memcpy(data, pixels, static_cast<size_t>(imageSize));
-				vkUnmapMemory(device, stagingBufferMemory);
-
-				stbi_image_free(pixels);
-
-				VkImage textureImage = VK_NULL_HANDLE;
-				VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
-
-				m_VulkanCreateImage->createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory, 1, 0);
-				m_VulkanBuffer->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
-				m_VulkanBuffer->copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 0);
-				//generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-				m_VulkanBuffer->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mipLevels, 0);
-				vkDestroyBuffer(device, stagingBuffer, nullptr);
-				vkFreeMemory(device, stagingBufferMemory, nullptr);
-
-				VkImageView textureImageView = m_VulkanCreateImage->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, 0, 1);
-				if (type == "ambient")
-				{
-					//object.textures.imageViews[0] = textureImageView;
-					DescriptorTextureInfo ambientInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
-					object.texturesInfo.push_back(ambientInfo);
-				}
-				else if (type == "diffuse")
-				{
-					//	object.textures.imageViews[1] = textureImageView;
-					DescriptorTextureInfo diffuseInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
-					object.texturesInfo.push_back(diffuseInfo);
-				}
-				else if (type == "specular")
-				{
-					//object.textures.imageViews[2] = textureImageView;
-					DescriptorTextureInfo specularInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
-					object.texturesInfo.push_back(specularInfo);
-				}
-				else if (type == "normal")
-				{
-					//object.textures.imageViews[3] = textureImageView;
-					DescriptorTextureInfo normalInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, textureImageView };
-					object.texturesInfo.push_back(normalInfo);
-
-					DescriptorTextureInfo shadowInfo = { VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, shadowSampler, shadowImageView };
-					object.texturesInfo.push_back(shadowInfo);
-
-					DescriptorTextureInfo cubeConvolutionInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, CubeConvolutionImageView };
-					object.texturesInfo.push_back(cubeConvolutionInfo);
-
-					DescriptorTextureInfo prefilterInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, prefilterTextureSampler, prefilterMapView };
-					object.texturesInfo.push_back(prefilterInfo);
-
-					DescriptorTextureInfo BRDFInfo = { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, textureSampler, BRDFImageView };
-					object.texturesInfo.push_back(BRDFInfo);
-
-
-				}
-				textureImages.push_back(textureImage);
-				textureImagesView.push_back(textureImageView);
-				textureImagesMemory.push_back(textureImageMemory);
-
 			}
-			*/
 		}
 	}
 
@@ -1457,10 +1374,9 @@ namespace Tokucu {
 				uint32_t mipWidth = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 				uint32_t mipHeight = std::max(1u, static_cast<uint32_t>(prefilterMapResolution * std::pow(0.5f, mip)));
 
-				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
-					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
-					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
-				
+				// No manual barrier needed. The render pass will transition
+				// UNDEFINED → COLOR_ATTACHMENT_OPTIMAL at subpass start and to
+				// SHADER_READ_ONLY_OPTIMAL at the end (see renderPassHDR).
 				VkImageView prefilterMapTempView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
 					VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_ASPECT_COLOR_BIT, 1, mip, 6);
 				
@@ -1483,9 +1399,8 @@ namespace Tokucu {
 				}
 				vkCmdEndRenderPass(commandBuffer);
 				
-				m_VulkanBuffer->transitionImageLayout(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 
-					VK_IMAGE_ASPECT_COLOR_BIT, 6, 1, mip);
+				// No post-barrier needed; finalLayout in the render pass already
+				// transitions the sub-resource to SHADER_READ_ONLY_OPTIMAL.
 			}
 			
 			prefilterMapView = m_VulkanCreateImage->createImageView(prefilterMapImage, VK_FORMAT_R32G32B32A32_SFLOAT, 
@@ -1560,7 +1475,23 @@ namespace Tokucu {
 		glm::vec3 LightSourcePosition = glm::vec3(0.0f, 0.0f, 2.0f);
 		glm::vec3 specular = glm::vec3(1.0f);
 		glm::vec3 viewpos = camera->GetPosition();
-		glm::mat4 lightProjection = glm::perspective(glm::radians(90.0f), 1.f, 0.1f, 100.f);
+		// Pre-compute expensive matrices once per frame ---------------------
+		const glm::mat4 lightProjection = glm::perspective(glm::radians(90.0f), 1.f, 0.1f, 100.f);
+
+		const float aspect = m_VulkanSwapChain->getSwapChainExtent().width /
+							 static_cast<float>(m_VulkanSwapChain->getSwapChainExtent().height);
+		const glm::mat4 mainProjection = glm::perspective(glm::radians(90.0f), aspect, 0.1f, 100.0f);
+
+		// Capture views for IBL once
+		glm::mat4 cachedCaptureViews[6] = {
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3( 1.0f,  0.0f,  0.0f), glm::vec3(0.0f,-1.0f,  0.0f)),
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3(-1.0f,  0.0f,  0.0f), glm::vec3(0.0f,-1.0f,  0.0f)),
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3( 0.0f,  1.0f,  0.0f), glm::vec3(0.0f,  0.0f,  1.0f)),
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3( 0.0f, -1.0f,  0.0f), glm::vec3(0.0f,  0.0f, -1.0f)),
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3( 0.0f,  0.0f,  1.0f), glm::vec3(0.0f,-1.0f,  0.0f)),
+			lightProjection * glm::lookAt(glm::vec3(0.0f), glm::vec3( 0.0f,  0.0f, -1.0f), glm::vec3(0.0f,-1.0f,  0.0f))
+		};
+
 		glm::vec3 LightSourcePosition2(5 * cos(time), 0.0f, 5 * sin(time));
 
 		// Only set default transformations if they haven't been modified by SceneEditor
@@ -1638,6 +1569,17 @@ namespace Tokucu {
 		if (m_ModifiedObjects.find("pointLight2") == m_ModifiedObjects.end() || !m_ModifiedObjects["pointLight2"]) {
 			objectColor["pointLight2"] = glm::vec3(0, 0.8, 0.8);
 		}
+
+		// --- NEW: Sync light positions with their representative cube objects ---
+		auto extractTranslation = [](const glm::mat4& m) -> glm::vec3 {
+			return glm::vec3(m[3][0], m[3][1], m[3][2]);
+		};
+		if (objectTransformations.count("pointLight1"))
+			LightSourcePosition = extractTranslation(objectTransformations["pointLight1"]);
+		if (objectTransformations.count("pointLight2"))
+			LightSourcePosition2 = extractTranslation(objectTransformations["pointLight2"]);
+		// --- END NEW ---
+
 		glm::mat4 shadowMatrixPL1[] = {
 			{ {lightProjection * glm::lookAt(LightSourcePosition, LightSourcePosition + glm::vec3(1.0, 0.0, 0.0), glm::vec3(0.0, -1.0, 0.0)) } } , // Right (+X)
 			{ {lightProjection * glm::lookAt(LightSourcePosition, LightSourcePosition + glm::vec3(-1.0, 0.0, 0.0), glm::vec3(0.0, -1.0, 0.0))} } , // Left (-X)
@@ -1655,15 +1597,6 @@ namespace Tokucu {
 			{{lightProjection * glm::lookAt(LightSourcePosition2, LightSourcePosition2 + glm::vec3(0.0, 0.0, 1.0), glm::vec3(0.0, -1.0, 0.0)) }} ,     // Forward (+Z)
 			{{lightProjection * glm::lookAt(LightSourcePosition2, LightSourcePosition2 + glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, -1.0, 0.0))}}     // Backward (-Z)
 		};
-		glm::mat4 captureViews[] =
-		{
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f,  0.0f,  0.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(-1.0f,  0.0f,  0.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f,  1.0f,  0.0f), glm::vec3(0.0f,  0.0f,  1.0f)),
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f,  0.0f), glm::vec3(0.0f,  0.0f, -1.0f)),
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f,  0.0f,  1.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
-		  lightProjection * glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f,  0.0f, -1.0f), glm::vec3(0.0f, -1.0f,  0.0f))
-		};
 
 		pointLights = { { objectColor["pointLight1"], LightSourcePosition, ambientColor, diffuseColor, specular,viewpos, 1.f, 0.09f, 0.032f}, {objectColor["pointLight2"], LightSourcePosition2, ambientColor, diffuseColor, specular,viewpos, 1.f, 0.09f, 0.032f} };
 
@@ -1680,10 +1613,9 @@ namespace Tokucu {
 			ubo.model = model;
 			ubo.view = camera->GetView();
 
-			//ubo.proj = glm::perspective(glm::radians(90.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 100.0f);
-			ubo.proj = glm::perspective(glm::radians(90.0f), m_VulkanSwapChain->getSwapChainExtent().width / (float)m_VulkanSwapChain->getSwapChainExtent().height, 0.1f, 100.0f);
+			// Use cached projection matrix (avoids trig recompute per object)
+			ubo.proj = mainProjection;
 
-			//ubo.proj = glm::perspective(glm::radians(90.0f), 1.f, 0.1f, 100.0f);
 			ubo.proj[1][1] *= -1;
 
 			ColorUniform colorUbo{};
@@ -1709,7 +1641,7 @@ namespace Tokucu {
 			{
 				ubo.view = glm::mat4(glm::mat3(camera->GetView()));
 				memcpy(object.uniformBuffersMapped[0][currentImage], &ubo, sizeof(ubo));
-				memcpy(object.uniformBuffersMapped[1][currentImage], captureViews, sizeof(glm::mat4) * 6);
+				memcpy(object.uniformBuffersMapped[1][currentImage], cachedCaptureViews, sizeof(glm::mat4) * 6);
 			}
 		}
 	}
@@ -1824,6 +1756,95 @@ namespace Tokucu {
 
         // Mark as modified so auto-transform update doesn't overwrite external edits
         m_ModifiedObjects[objectName] = true;
+    }
+
+    ImTextureID VulkanRendererAPI::GetOrCreateImGuiTexture(VkSampler sampler, VkImageView view)
+    {
+        uint64_t key = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(sampler)) << 32) ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view));
+        static std::unordered_map<uint64_t, ImTextureID> cache;
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+
+        if (!imGuiInitialized) return 0;
+
+        VkDescriptorSet id = ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        cache[key] = (ImTextureID)id;
+        return (ImTextureID)id;
+    }
+
+    void VulkanRendererAPI::UpdateObjectTexture(VulkanObject* targetObj, const std::string& textureType, const std::string& newPath)
+    {
+        if (!targetObj) return;
+
+        // Request load
+        std::vector<std::pair<std::string, std::string>> req = { {textureType, newPath} };
+        auto futures = m_VulkanTextureManager->LoadTexturesBatch(req);
+        DescriptorTextureInfo newInfo = futures[0].get();
+
+        size_t replaceIndex = SIZE_MAX;
+        for (size_t i = 0; i < targetObj->textureLocations.size(); ++i) {
+            if (targetObj->textureLocations[i].first == textureType) { replaceIndex = i; break; }
+        }
+        if (replaceIndex == SIZE_MAX) {
+            targetObj->textureLocations.push_back({textureType, newPath});
+            targetObj->texturesInfo.push_back(newInfo);
+        } else {
+            targetObj->textureLocations[replaceIndex].second = newPath;
+            if (replaceIndex < targetObj->texturesInfo.size())
+                targetObj->texturesInfo[replaceIndex] = newInfo;
+            else
+                targetObj->texturesInfo.push_back(newInfo);
+        }
+        try {
+            m_VulkanGraphicsPipeline->createDescriptorSets(targetObj);
+        } catch (...) {}
+    }
+
+    /*
+     * Load an FBX model at runtime. The model is appended to the scene using the existing
+     * createModel() helper. Descriptor pools / sets are regenerated so that all objects
+     * (existing + new) share a fresh pool big enough to hold the enlarged object list.
+     */
+    void VulkanRendererAPI::LoadModelFromFBX(const std::string& modelPath, const std::string& textureDir)
+    {
+        // Derive a readable name from the file path (file stem without extension)
+        std::string modelName = std::filesystem::path(modelPath).stem().string();
+
+        // 1. Create the VulkanObject(s) for the FBX file (re-uses existing helper)
+        createModel(modelName, modelPath, textureDir);
+
+        // 2. Ensure textures for newly added meshes are prepared (default or custom)
+        createTextureImage();
+
+        // 3. Re-create descriptor pools with the new total object count so that future
+        //    descriptor set allocations succeed even if we exceeded the original size.
+        const uint32_t newObjectCount = static_cast<uint32_t>(Objects.size());
+        for (auto& pipeline : Pipelines) {
+            // Destroy the old pool (descriptor sets are implicitly freed)
+            if (pipeline->descriptorPool != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(device, pipeline->descriptorPool, nullptr);
+                pipeline->descriptorPool = VK_NULL_HANDLE;
+            }
+            // Create a fresh pool sized for all objects
+            m_VulkanGraphicsPipeline->createDescriptorPool(pipeline, newObjectCount);
+        }
+
+        // 4. Ensure uniform buffers exist for any newly added objects
+        for (auto& obj : Objects) {
+            if (obj.uniformBuffers.empty()) {
+                m_VulkanBuffer->createUniformBuffers(obj);
+            }
+        }
+
+        // 5. Re-create descriptor sets for *all* objects so that they reference the new pools
+        for (auto& obj : Objects) {
+            m_VulkanGraphicsPipeline->createDescriptorSets(&obj);
+        }
+
+        // 6. Update cached object lists for faster iteration in future frames
+        CacheObjectLists();
+
+        TKC_CORE_INFO("Runtime FBX model loaded: {} ({} objects total)", modelName, Objects.size());
     }
 }
 
