@@ -7,6 +7,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "GLFW/glfw3.h"
+#include <algorithm>
 
 namespace Tokucu
 {
@@ -39,203 +40,107 @@ namespace Tokucu
 	{
 		ImGuiIO& io = ImGui::GetIO();
 		auto camera = Camera::GetInstance();
-		
-		// Always allow keyboard input when cursor is disabled (free-look mode)
-		if (!m_CursorEnabled) {
-			// In free-look mode, allow all keyboard input regardless of ImGui state
-			if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+
+		// ------------------------------------------------------------
+		// Global shortcuts (active regardless of camera-control state)
+		// ------------------------------------------------------------
+		if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+		{
+			WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+			WindowCloseEvent event;
+			data.EventCallback(event);
+		}
+
+		// Toggle cursor/free-look with P
+		static bool pKeyWasPressed = false;
+		if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS)
+		{
+			if (!pKeyWasPressed)
 			{
-				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-				WindowCloseEvent event;
-				data.EventCallback(event);
+				m_CursorEnabled = !m_CursorEnabled;
+				glfwSetInputMode(m_Window, GLFW_CURSOR, m_CursorEnabled ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+				firstMouse = true; // avoid jump on next move
+				// Enable/disable ImGui mouse according to cursor state
+				if (!m_CursorEnabled)
+					io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+				else
+					io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+				pKeyWasPressed = true;
 			}
-			
-			if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-				camera->ProcessKeyboard(FORWARD);
-			if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-				camera->ProcessKeyboard(BACKWARD);
-			if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-				camera->ProcessKeyboard(LEFT);
-			if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-				camera->ProcessKeyboard(RIGHT);
-			
-			static bool pKeyWasPressed = false;
-			if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
-				if (!pKeyWasPressed) {
-					m_CursorEnabled = !m_CursorEnabled;
-					glfwSetInputMode(m_Window, GLFW_CURSOR, m_CursorEnabled ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-					// Reset firstMouse when toggling cursor to prevent camera jumps
-					firstMouse = true;
-					pKeyWasPressed = true;
-				}
-			}
-			else {
-				pKeyWasPressed = false;
-			}
+		}
+		else
+		{
+			pKeyWasPressed = false;
+		}
+
+		// Ensure ImGui mouse flag stays consistent in case window regains focus etc.
+		if (m_CursorEnabled)
+			io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+		else
+			io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+
+		// ------------------------------------------------------------
+		// Camera movement (WASD) – enabled in free-look or while RMB held
+		// ------------------------------------------------------------
+		const bool cameraControlActive = (!m_CursorEnabled || s_RightMousePressed);
+
+		// If ImGui wants the keyboard and we are NOT controlling the camera, early out
+		if (!cameraControlActive && io.WantCaptureKeyboard)
 			return;
-		}
-		
-		// Normal mode - check if keyboard is captured by ImGui
-		if (io.WantCaptureKeyboard) {
-			// Check if we're over the viewport window specifically
-			ImGuiContext* context = ImGui::GetCurrentContext();
-			ImGuiWindow* hoveredWindow = context ? context->HoveredWindow : nullptr;
-			if (hoveredWindow && strstr(hoveredWindow->Name, "Viewport") != nullptr) {
-				// Allow keyboard input for viewport window
-				if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-				{
-					WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-					WindowCloseEvent event;
-					data.EventCallback(event);
-				}
-				
-				if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-					camera->ProcessKeyboard(FORWARD);
-				if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-					camera->ProcessKeyboard(BACKWARD);
-				if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-					camera->ProcessKeyboard(LEFT);
-				if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-					camera->ProcessKeyboard(RIGHT);
-				
-				static bool pKeyWasPressed = false;
-				if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
-					if (!pKeyWasPressed) {
-						m_CursorEnabled = !m_CursorEnabled;
-						glfwSetInputMode(m_Window, GLFW_CURSOR, m_CursorEnabled ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-						// Reset firstMouse when toggling cursor to prevent camera jumps
-						firstMouse = true;
-						pKeyWasPressed = true;
-					}
-				}
-				else {
-					pKeyWasPressed = false;
-				}
-			}
-			else {
-				return; // Block keyboard input if ImGui wants keyboard and we're not over viewport
-			}
-		}
+
+		if (!cameraControlActive)
+			return; // nothing to do this frame
+
+		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+			camera->ProcessKeyboard(FORWARD);
+		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+			camera->ProcessKeyboard(BACKWARD);
+		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+			camera->ProcessKeyboard(LEFT);
+		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+			camera->ProcessKeyboard(RIGHT);
 	}
 
 	void WindowsWindow::mouse_callback(double xpos, double ypos)
 	{
-		// Always allow mouse input when cursor is disabled (free-look mode)
-		if (!m_CursorEnabled) {
-			auto camera = Camera::GetInstance();
-			
-			if (firstMouse)
-			{
-				lastX = xpos;
-				lastY = ypos;
-				yaw = -90;
-				pitch = 0;
-				firstMouse = false;
-			}
+		// Determine whether we should rotate the camera this frame
+		const bool rotateCamera = !m_CursorEnabled || s_RightMousePressed;
 
-			float xoffset = xpos - lastX;
-			float yoffset = lastY - ypos;
-			lastX = xpos;
-			lastY = ypos;
-
-			float sensitivity = 0.1f;
-			xoffset *= sensitivity;
-			yoffset *= sensitivity;
-
-			yaw += xoffset;
-			pitch += yoffset;
-
-			if (pitch > 89.0f)
-				pitch = 89.0f;
-			if (pitch < -89.0f)
-				pitch = -89.0f;
-
-			camera->updateCameraVectors(yaw, pitch);
-			return;
-		}
-		// In normal cursor mode, only allow camera rotation while the right mouse button is held
-		if (m_CursorEnabled && !s_RightMousePressed)
+		if (!rotateCamera)
 		{
-			// Reset the firstMouse flag so that when the button is pressed again we avoid a large jump
+			// Not rotating; ensure next movement starts cleanly
 			firstMouse = true;
 			return;
 		}
 
-		// Normal mode - check ImGui mouse capture
-		ImGuiIO& io = ImGui::GetIO();
-		if (io.WantCaptureMouse) {
-			// Check if we're over the viewport window specifically
-			ImGuiContext* context = ImGui::GetCurrentContext();
-			ImGuiWindow* hoveredWindow = context ? context->HoveredWindow : nullptr;
-			if (hoveredWindow && strstr(hoveredWindow->Name, "Viewport") != nullptr)
-			{
-				// Allow camera input for viewport window
-				auto camera = Camera::GetInstance();
-				
-				if (firstMouse)
-				{
-					lastX = xpos;
-					lastY = ypos;
-					yaw = -90;
-					pitch = 0;
-					firstMouse = false;
-				}
+		// Perform camera rotation based on mouse delta
+		auto camera = Camera::GetInstance();
 
-				float xoffset = xpos - lastX;
-				float yoffset = lastY - ypos;
-				lastX = xpos;
-				lastY = ypos;
-
-				float sensitivity = 0.1f;
-				xoffset *= sensitivity;
-				yoffset *= sensitivity;
-
-				yaw += xoffset;
-				pitch += yoffset;
-
-				if (pitch > 89.0f)
-					pitch = 89.0f;
-				if (pitch < -89.0f)
-					pitch = -89.0f;
-
-				camera->updateCameraVectors(yaw, pitch);
-			}
-			else {
-				return; // Block camera input if ImGui wants mouse and we're not over viewport
-			}
-		}
-		else {
-			// If ImGui doesn't want mouse capture, allow camera movement regardless
-			auto camera = Camera::GetInstance();
-
-			if (firstMouse)
-			{
-				lastX = xpos;
-				lastY = ypos;
-				yaw = -90;
-				pitch = 0;
-				firstMouse = false;
-			}
-
-			float xoffset = xpos - lastX;
-			float yoffset = lastY - ypos;
+		if (firstMouse)
+		{
 			lastX = xpos;
 			lastY = ypos;
-
-			float sensitivity = 0.1f;
-			xoffset *= sensitivity;
-			yoffset *= sensitivity;
-
-			yaw += xoffset;
-			pitch += yoffset;
-
-			if (pitch > 89.0f)
-				pitch = 89.0f;
-			if (pitch < -89.0f)
-				pitch = -89.0f;
-
-			camera->updateCameraVectors(yaw, pitch);
+			yaw = -90;
+			pitch = 0;
+			firstMouse = false;
 		}
+
+		float xoffset = static_cast<float>(xpos - lastX);
+		float yoffset = static_cast<float>(lastY - ypos);
+		lastX = xpos;
+		lastY = ypos;
+
+		constexpr float sensitivity = 0.1f;
+		xoffset *= sensitivity;
+		yoffset *= sensitivity;
+
+		yaw += xoffset;
+		pitch += yoffset;
+
+		pitch = std::clamp(pitch, -89.0f, 89.0f);
+
+		camera->updateCameraVectors(yaw, pitch);
+		return;
 	}
 
 	void WindowsWindow::Init(const WindowProps& props)
@@ -496,37 +401,20 @@ namespace Tokucu
 
 		glfwSetCursorPosCallback(m_Window, [](GLFWwindow* window, double xPos, double yPos)
 			{
-				// Get the window instance to check cursor state
 				WindowsWindow* instance = (WindowsWindow*)(glfwGetWindowUserPointer(window));
-				
-				// Always allow mouse movement when cursor is disabled (free-look mode)
-				if (instance && !instance->m_CursorEnabled) {
-					WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-					MouseMovedEvent event((float)xPos, (float)yPos);
-					data.EventCallback(event);
-					instance->mouse_callback(xPos, yPos);
-					return;
-				}
-				
-				// Normal mode - check ImGui mouse capture
-				ImGuiIO& io = ImGui::GetIO();
-				if (io.WantCaptureMouse) {
-					// Check if we're over the viewport window specifically
-					ImGuiContext* context = ImGui::GetCurrentContext();
-					ImGuiWindow* hoveredWindow = context ? context->HoveredWindow : nullptr;
-					if (hoveredWindow && strstr(hoveredWindow->Name, "Viewport") != nullptr) {
-						// Allow input for viewport window
-						WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-						MouseMovedEvent event((float)xPos, (float)yPos);
-						data.EventCallback(event);
-						instance->mouse_callback(xPos, yPos);
-					}
-					return; // Block engine event if ImGui wants mouse and we're not over viewport
-				}
-				WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+				WindowData& data   = *(WindowData*)glfwGetWindowUserPointer(window);
+
+				// Dispatch raw mouse-moved event so the rest of the engine/UI can react.
 				MouseMovedEvent event((float)xPos, (float)yPos);
 				data.EventCallback(event);
-				instance->mouse_callback(xPos, yPos);
+
+				// Forward to camera when either the cursor is disabled (free-look) OR
+				// the right mouse button is currently pressed.
+				bool rotateCamera = (instance && ((!instance->m_CursorEnabled) || s_RightMousePressed));
+				if (rotateCamera)
+				{
+					instance->mouse_callback(xPos, yPos);
+				}
 			});
 	}
 

@@ -224,6 +224,8 @@ namespace Tokucu
 		const std::vector<const char*>& getDeviceExtensions() const { return deviceExtensions; }
 
 	private:
+
+
 		VkInstance instance = VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 		const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };

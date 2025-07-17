@@ -9,7 +9,6 @@
 #include "Tokucu/Renderer/Camera.h"
 #include "Tokucu/Renderer/FBXLoader.h"
 
-
 #include "VulkanSwapChain.h"
 #include "VulkanCreateImage.h"
 #include "VulkanFramebuffer.h"
@@ -18,8 +17,6 @@
 #include "VulkanBuffer.h"
 #include "VulkanTextureManager.h"
 
-// ImGui Vulkan integration
-//#include "imgui/imgui_impl_vulkan.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image/stb_image.h"
@@ -27,69 +24,7 @@
 namespace Tokucu {
 	VulkanRendererAPI::VulkanRendererAPI()
 	{
-		secondVertices = {
-			{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-			{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-			{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
-			{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-			{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-			{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
-		};
-		secondIndices = {
-		   0, 1, 2, 2, 3, 0,
-		   4, 5, 6, 6, 7, 4
-		};
-
-		cubeVertices = {
-			//Positions          // Normals           // Texture Coords
-		   // Front face
-		   {{-0.5f, -0.5f,  0.5f }  ,  {  0.0f,  0.0f,  1.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{ 0.5f, -0.5f,  0.5f }  ,  {  0.0f,  0.0f,  1.0f}   ,{  1.0f, 0.0f  }}, // Bottom-right
-		   {{ 0.5f,  0.5f,  0.5f }  ,  {  0.0f,  0.0f,  1.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{-0.5f,  0.5f,  0.5f }  ,  {  0.0f,  0.0f,  1.0f}   ,{  0.0f, 1.0f  }}, // Top-left
-		   // Back face		 
-		   {{-0.5f, -0.5f, -0.5f }  ,  {  0.0f,  0.0f, -1.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{ 0.5f, -0.5f, -0.5f }  ,  {  0.0f,  0.0f, -1.0f}   ,{  1.0f, 0.0f  }}, // Bottom-right
-		   {{ 0.5f,  0.5f, -0.5f }  ,  {  0.0f,  0.0f, -1.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{-0.5f,  0.5f, -0.5f }  ,  {  0.0f,  0.0f, -1.0f}   ,{  0.0f, 1.0f  }}, // Top-left
-		   // Left face		
-		   {{-0.5f, -0.5f, -0.5f }  ,  { -1.0f,  0.0f,  0.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{-0.5f,  0.5f, -0.5f }  ,  { -1.0f,  0.0f,  0.0f}   ,{  1.0f, 0.0f  }}, // Top-left
-		   {{-0.5f,  0.5f,  0.5f }  ,  { -1.0f,  0.0f,  0.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{-0.5f, -0.5f,  0.5f }  ,  { -1.0f,  0.0f,  0.0f}   ,{  0.0f, 1.0f  }}, // Bottom-right
-		   // Right face		
-		   {{ 0.5f, -0.5f, -0.5f }  ,  {  1.0f,  0.0f,  0.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{ 0.5f,  0.5f, -0.5f }  ,  {  1.0f,  0.0f,  0.0f}   ,{  1.0f, 0.0f  }}, // Top-left
-		   {{ 0.5f,  0.5f,  0.5f }  ,  {  1.0f,  0.0f,  0.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{ 0.5f, -0.5f,  0.5f }  ,  {  1.0f,  0.0f,  0.0f}   ,{  0.0f, 1.0f  }}, // Bottom-right
-		   //Top face		
-		   {{ -0.5f,  0.5f, -0.5f}  ,  {  0.0f,  1.0f,  0.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{  0.5f,  0.5f, -0.5f}  ,  {  0.0f,  1.0f,  0.0f}   ,{  1.0f, 0.0f  }}, // Bottom-right
-		   {{  0.5f,  0.5f,  0.5f}  ,  {  0.0f,  1.0f,  0.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{ -0.5f,  0.5f,  0.5f}  ,  {  0.0f,  1.0f,  0.0f}   ,{  0.0f, 1.0f  }}, // Top-left
-		   // Bottom face	 	
-		   {{ -0.5f, -0.5f, -0.5f}  ,  {  0.0f, -1.0f,  0.0f}   ,{  0.0f, 0.0f  }}, // Bottom-left
-		   {{  0.5f, -0.5f, -0.5f}  ,  {  0.0f, -1.0f,  0.0f}   ,{  1.0f, 0.0f  }}, // Bottom-right
-		   {{  0.5f, -0.5f,  0.5f}  ,  {  0.0f, -1.0f,  0.0f}   ,{  1.0f, 1.0f  }}, // Top-right
-		   {{ -0.5f, -0.5f,  0.5f}  ,  {  0.0f, -1.0f,  0.0f}   ,{  0.0f, 1.0f  }}  // Top-left
-		};
-		cubeIndices = {
-			// Front face (CCW)
-			1, 2, 0,  2, 3, 0,
-			// Back face (CCW)
-			6, 5, 4,  7, 6, 4,
-			// Left face (CCW)
-			8, 10, 9,  8, 11, 10,
-			// Right face (CCW)
-			12, 13, 14,  12, 14, 15,
-			// Top face (CCW)
-			16, 18, 17,  16, 19, 18,
-			// Bottom face (CCW)
-			20, 21, 22,  20, 22, 23
-		};
+		
 	}
 
 	void VulkanRendererAPI::Init(const std::shared_ptr<Window>& window)
@@ -129,15 +64,13 @@ namespace Tokucu {
 		registerPipeline();
 		createGraphicsPipeline();
 		createShadowFramebuffer();
-
+		
 		createObject();
 
 		createTextureSampler();
 		createTextureImage();
 
-		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
-		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
+		registerModel();
 
 		createUniformBuffers();
 
@@ -900,10 +833,6 @@ namespace Tokucu {
 		BufferData planeVertexData = m_VulkanBuffer->createVertexBuffer(secondVertices);
 		BufferData planeIndexData = m_VulkanBuffer->createIndexBuffer(secondIndices);
 
-		//realCube = { "realCube", cubeVertices, cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, getBindingDescription() , getAttributeDescriptions(),&m_Pipeline,true,std::nullopt,
-		//	{{"ambient","textures/Lambda.jpg"},{"diffuse","textures/Lambda.jpg"},{"specular","textures/LambdaSpecular.jpg"},{"normal","textures/defaultNormal.jpg"}} };
-		//Objects.push_back(realCube);
-
 		VulkanObject base = { "base", cubeVertices,cubeIndices, vertexData.buffer, vertexData.memory,indexData.buffer, indexData.memory, &m_Pipeline,true,std::nullopt };
 		Objects.push_back(base);
 		
@@ -950,11 +879,13 @@ namespace Tokucu {
 		VulkanObject BRDFLud = { "BRDFLud", secondVertices,secondIndices, planeVertexData.buffer, planeVertexData.memory,planeIndexData.buffer, planeIndexData.memory//,getBindingDescription() , getAttributeDescriptions()
 			,&m_PipelineBRDF,false,std::nullopt };
 		Objects.push_back(BRDFLud);
+	}
 
-		//createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
+	void VulkanRendererAPI::registerModel()
+	{
+		createModel("Shotgun", "assets/models/shotgun/ShotgunTri.fbx", "assets/textures/Shotgun/");
 		//createModel("Helmet", "assets/models/Helmet/sci_fi_space_helmet_by_aliashasim.fbx", "assets/textures/Helmet/");
-		//createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
-
+		createModel("Glock", "assets/models/Glock/MDL_Glock.fbx", "assets/textures/Glock/");
 	}
 
 	void VulkanRendererAPI::createModel(std::string modelName, std::string modelLocation, std::string textureLocation) {

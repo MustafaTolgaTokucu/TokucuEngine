@@ -114,8 +114,6 @@ namespace Tokucu {
 		ImTextureID GetOrCreateImGuiTexture(VkSampler sampler, VkImageView view);
 
 	private:
-		////////////////////////////////////
-		////VULKAN INITIALIZERS (TEMPORARY)
 		//////////////////////////////////
 		///VULKAN FUNCTIONS
 		/////////////////////////////////
@@ -138,13 +136,9 @@ namespace Tokucu {
 		//////////////////////////
 		void registerPipeline();
 		void createObject();
+		void registerModel();
 		void createModel(std::string modelName, std::string modelLocation, std::string textureLocation);
 		void createShadowFramebuffer();
-
-		// Offscreen render pass creation
-	
-
-		// ImGui Vulkan integration
 		
 		////////////////////////////////////////////
 		/////VULKAN CLASS MEMBERS
@@ -176,20 +170,14 @@ namespace Tokucu {
 		std::vector<Vertex> vertices = {};
 		std::vector<uint32_t> indices = {};
 
-		//added to eCS
-		std::vector<glm::vec3> cubePositions;
-		std::vector<Vertex> secondVertices;
-		std::vector<uint32_t> secondIndices;
-		//added to ECS
-		std::vector<Vertex> cubeVertices;
-		std::vector<uint32_t> cubeIndices;
+		//std::vector<glm::vec3> cubePositions;
+		
 
 
 		std::unordered_map<std::string, glm::mat4> objectTransformations; //Holding transformation information for each object
 		std::unordered_map<std::string, glm::vec3> objectColor;
 
 		std::vector<LightAttributes> pointLights = { pointLight1,pointLight2 };
-		//added to ECS
 		std::vector<Pipeline*> Pipelines;
 		Pipeline m_Pipeline;
 		Pipeline m_Pipeline2;
