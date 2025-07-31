@@ -50,7 +50,8 @@ Simple Vulkan-based 3D renderer written in C++. Designed for learning basics of 
 - cmake ..
 
 Textures should be downloaded in Sandbox/assets/, and assets folder should be copied in build/Sandbox/debug/ for renderer to work properly.
-Assets: https://drive.google.com/drive/folders/1AMJjlwO_26HA5Arq67YjQvfoDOWSCiE2?usp=sharing
+  
+  Assets: https://drive.google.com/drive/folders/1AMJjlwO_26HA5Arq67YjQvfoDOWSCiE2?usp=sharing
 
 !!Vulkan SDK and FBX SDK should be manually linked. 
 
